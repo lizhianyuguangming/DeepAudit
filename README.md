@@ -13,8 +13,6 @@ DeepAudit 一款基于deepseek的智能化代码审计工具，支持多语言�
 - **风险等级评估**：高危/中危/低危三级分类
 
 ## 🛠️ 环境安装
-
-### 依赖要求
 ```bash
 pip install -r requirements.txt
 ```
@@ -23,6 +21,8 @@ config.ini配置API密钥
 ```bash
 python DeepAudit.py
 ```
+![image](https://github.com/user-attachments/assets/41d926e7-008c-4d9b-9cb9-2edf0794bf9d)
+
 
 📂 未完成模块
 -    逆向追踪代码链
