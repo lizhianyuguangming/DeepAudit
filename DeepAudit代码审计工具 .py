@@ -413,18 +413,13 @@ class CodeAuditApp:
         container.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
         # 垂直滚动条
-        vsb = ttk.Scrollbar(container, orient=tk.VERTICAL)
+        vsb = tk.Scrollbar(container, orient=tk.VERTICAL, width=10)
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
-
-        # 水平滚动条
-        hsb = ttk.Scrollbar(container, orient=tk.HORIZONTAL)
-        hsb.pack(side=tk.BOTTOM, fill=tk.X)
 
         # 树状视图
         self.tree = ttk.Treeview(
             container,
             yscrollcommand=lambda f, l: self._update_scrollbar(f, l, vsb),
-            xscrollcommand=lambda f, l: self._update_scrollbar(f, l, hsb),
             selectmode='browse',
             show='tree',
             height=20
@@ -433,7 +428,6 @@ class CodeAuditApp:
 
         # 配置滚动条
         vsb.config(command=self.tree.yview)
-        hsb.config(command=self.tree.xview)
 
         # 动态列宽配置
         self.tree.column("#0", minwidth=200, stretch=tk.YES)
@@ -462,21 +456,10 @@ class CodeAuditApp:
     def _update_scrollbar(self, first, last, scrollbar):
         """更新滚动条位置并确保其可见性"""
         scrollbar.set(first, last)
-
-        # 获取滚动条的方向
-        orient_value = scrollbar.cget('orient')
-
-        # 根据方向设置正确的fill值
-        if orient_value == 'horizontal':
-            fill_value = 'x'
-        else:  # vertical
-            fill_value = 'y'
-
-        # 根据滚动范围决定是否显示滚动条
-        if float(first) <= 0.0 and float(last) >= 1.0:
-            scrollbar.pack_forget()
-        else:
-            scrollbar.pack(expand=False, fill=fill_value)
+        
+        # 始终显示垂直滚动条，不再根据滚动范围隐藏
+        # 这样可以确保滚动条始终可见且易于点击
+        scrollbar.pack(expand=False, fill=tk.Y, side=tk.RIGHT)
 
     def _handle_tree_resize(self, event=None):
         """处理树状视图尺寸变化"""
