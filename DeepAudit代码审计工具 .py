@@ -27,7 +27,7 @@ class CodeAuditApp:
     def __init__(self, root):
         self.event_queue = Queue()
         self.root = root
-        self.root.title("DeepAudit 代码审计工具 v2.1")
+        self.root.title("DeepAudit 代码审计工具 v1.0")
         self.root.geometry("1280x800")
 
         # 初始化漏洞列表
@@ -189,24 +189,26 @@ class CodeAuditApp:
             if hasattr(ws, 'title'):
                 ws.title = "漏洞扫描报告"
 
-            # 设置列宽
+            # 设置列宽 - 使用更合适的宽度单位，openpyxl中的宽度单位约为Excel中的0.14倍
             column_widths = {
-                'A': 5,  # ID
-                'B': 20,  # 漏洞类型
-                'C': 20,  # 风险等级
-                'D': 80,  # 文件路径 - 显著增加宽度
-                'E': 80,  # 漏洞描述 - 显著增加宽度
-                'F': 60,  # 风险点 - 显著增加宽度
-                'G': 60,  # Payload - 显著增加宽度
-                'H': 80,  # 修复建议 - 显著增加宽度
-                'I': 5,  # 行号
+                'A': 4,     # ID
+                'B': 12,    # 漏洞类型
+                'C': 12,    # 风险等级
+                'D': 50,    # 文件路径
+                'E': 60,    # 漏洞描述
+                'F': 40,    # 风险点
+                'G': 40,    # Payload
+                'H': 60,    # 修复建议
+                'I': 10,     # 行号
             }
 
-            # 安全地设置列宽
+            # 强制设置列宽并确保应用
             if hasattr(ws, 'column_dimensions'):
                 for col, width in column_widths.items():
-                    if col in ws.column_dimensions:
-                        ws.column_dimensions[col].width = width
+                    # 直接设置列宽，不检查列是否存在
+                    ws.column_dimensions[col].width = width
+                    # 设置自动换行以确保内容完整显示
+                    ws.column_dimensions[col].bestFit = True
 
             # 设置表头样式
             header_font = Font(name='微软雅黑', bold=True, size=11)
@@ -222,7 +224,7 @@ class CodeAuditApp:
             )
 
             # 添加表头
-            headers = ['ID', '漏洞类型', '风险等级', '文件路径', '漏洞描述', '风险点', 'Payload', '修复建议']
+            headers = ['ID', '漏洞类型', '风险等级', '文件路径', '漏洞描述', '风险点', 'Payload', '修复建议', '行号']
             for col_num, header in enumerate(headers, 1):
                 if hasattr(ws, 'cell'):
                     cell = ws.cell(row=1, column=col_num)
@@ -262,7 +264,9 @@ class CodeAuditApp:
                 ws.merge_cells(f'A{info_row}:I{info_row}')
                 cell = ws.cell(row=info_row, column=1)
                 if cell is not None:
-                    cell.value = f"发现漏洞总数: {self.vuln_id_counter - 1}"
+                    # 计算实际漏洞总数
+                    actual_vuln_count = len(self.result_tree.get_children())
+                    cell.value = f"发现漏洞总数: {actual_vuln_count}"
 
             # 添加表头（在信息行之后）
             header_row = info_row + 2
@@ -286,11 +290,25 @@ class CodeAuditApp:
 
                 # 添加数据行
                 if hasattr(ws, 'cell'):
+                    # 设置行高为自动调整
+                    if hasattr(ws, 'row_dimensions'):
+                        ws.row_dimensions[row_num].height = None  # 设置为None让Excel自动调整行高
+                    
                     for col_num, value in enumerate(values, 1):
                         cell = ws.cell(row=row_num, column=col_num)
                         if cell is not None:
-                            cell.value = str(value) if value is not None else ""
-                            cell.alignment = Alignment(vertical='center', wrap_text=True)
+                            # 确保行号列正确显示
+                            if col_num == 1:
+                                # ID列保持原样
+                                cell.value = str(value) if value is not None else ""
+                            elif col_num == 9:
+                                # 行号列（第9列）
+                                line_numbers = values[8] if len(values) > 8 and values[8] else "N/A"
+                                cell.value = str(line_numbers)
+                            else:
+                                cell.value = str(value) if value is not None else ""
+                            # 优化单元格对齐方式和自动换行设置
+                            cell.alignment = Alignment(vertical='center', horizontal='left', wrap_text=True)
                             cell.border = thin_border
 
                             # 根据风险等级设置颜色
@@ -573,6 +591,14 @@ class CodeAuditApp:
         """重置分析状态"""
         self.auto_analysis_paused = False
         self.auto_analysis_cancelled = False
+
+        # 确保按钮状态正确恢复
+        if hasattr(self, 'btn_analyze'):
+            self.btn_analyze.config(text="开始分析", state=tk.NORMAL)
+        if hasattr(self, 'btn_auto_analyze'):
+            self.btn_auto_analyze.config(text="自动分析", state=tk.NORMAL)
+        if hasattr(self, 'btn_pause_resume'):
+            self.btn_pause_resume.config(state=tk.DISABLED, text="暂停")
 
     def _init_right_panel(self, parent):
         """初始化右侧面板（修改为使用PanedWindow）"""
@@ -1058,6 +1084,11 @@ class CodeAuditApp:
         # 获取选中的文件列表
         file_list = self._get_selected_files()
 
+        # 检查是否有选中文件
+        if not file_list:
+            messagebox.showinfo("提示", "请先选择要分析的文件")
+            return
+
         # 初始化进度条
         self.progress['maximum'] = len(file_list)
         self.progress['value'] = 0
@@ -1066,8 +1097,12 @@ class CodeAuditApp:
         self.auto_analysis_cancelled = False
         self.auto_analysis_paused = False
 
+        # 更改按钮文本和状态
+        self.btn_analyze.config(text="取消分析", command=self.cancel_analysis)
+
         # 启用暂停按钮
-        self.btn_pause_resume.config(state=tk.NORMAL)
+        if hasattr(self, 'btn_pause_resume'):
+            self.btn_pause_resume.config(state=tk.NORMAL)
 
         # 创建后台线程
         self.auto_analysis_thread = threading.Thread(
@@ -1110,16 +1145,18 @@ class CodeAuditApp:
                 elif event_type == 'done':
                     # 重置进度条和状态
                     self.progress['value'] = 0
-                    # 无论是否取消，都恢复按钮状态
-                    self.btn_analyze.config(text="开始分析", state=tk.NORMAL)
-                    self.btn_auto_analyze.config(text="自动分析", state=tk.NORMAL)
-                    self.btn_pause_resume.config(state=tk.DISABLED, text="暂停")
 
-                    # 新增：确保所有按钮状态正确恢复
-                    if hasattr(self, 'btn_export'):
-                        self.btn_export.config(state=tk.NORMAL)
+                    # 无论是否取消，都恢复按钮状态和命令
+                    if hasattr(self, 'btn_analyze'):
+                        self.btn_analyze.config(text="开始分析", command=self.start_analysis)
+
+                    # 恢复其他按钮状态
+                    if hasattr(self, 'btn_auto_analyze'):
+                        self.btn_auto_analyze.config(text="自动分析", state=tk.NORMAL)
                     if hasattr(self, 'btn_pause_resume'):
                         self.btn_pause_resume.config(state=tk.DISABLED, text="暂停")
+                    if hasattr(self, 'btn_export'):
+                        self.btn_export.config(state=tk.NORMAL)
 
                     if self.auto_analysis_cancelled:
                         self.status_bar.config(text="分析已取消")
@@ -1130,6 +1167,7 @@ class CodeAuditApp:
                     # 确保重置分析状态
                     self.auto_analysis_cancelled = False
                     self.auto_analysis_paused = False
+
                     # 清理线程引用，避免状态混乱
                     if hasattr(self, 'auto_analysis_thread'):
                         delattr(self, 'auto_analysis_thread')
@@ -1248,10 +1286,8 @@ class CodeAuditApp:
                 thread.join()
 
         finally:
-            # 确保总是发送done事件
+            # 确保总是发送done事件，无论是否发生异常
             self.event_queue.put(('done', None, None))
-            # 重置分析状态
-            self.auto_analysis_cancelled = False
 
     def call_deepseek_api(self, code, suffix, file_path):
         """调用DeepSeek API"""
@@ -2099,6 +2135,12 @@ Payload：{values[6]}
                 # 即使失败也更新进度条
                 self.event_queue.put(('progress', None, None))
 
+            # 检查是否是最后一个文件，如果是则发送done事件
+            if hasattr(self, 'files_to_analyze') and hasattr(self, 'current_file_index'):
+                self.current_file_index += 1
+                if self.current_file_index >= len(self.files_to_analyze):
+                    self.event_queue.put(('done', None, None))
+
         except MemoryError:
             self.log_error(f"文件过大，无法读取: {file_path}")
             self.status_bar.config(text=f"{file_path.name} 文件过大，无法分析")
@@ -2408,6 +2450,19 @@ Payload：{values[6]}
                 elif event == 'error':
                     error_msg = data
                     self.show_error(error_msg)
+
+                # 添加对'done'事件的处理，用于重置分析按钮状态
+                elif event == 'done':
+                    # 重置分析按钮状态
+                    if hasattr(self, 'btn_analyze'):
+                        self.btn_analyze.config(text="开始分析", command=self.start_analysis)
+                    # 重置分析状态标志
+                    if hasattr(self, 'auto_analysis_cancelled'):
+                        self.auto_analysis_cancelled = False
+                    if hasattr(self, 'auto_analysis_paused'):
+                        self.auto_analysis_paused = False
+                    # 更新状态栏
+                    self.status_bar.config(text="分析完成")
 
                 if callback:
                     callback()
