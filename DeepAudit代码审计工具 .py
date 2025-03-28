@@ -889,8 +889,8 @@ class CodeAuditApp:
         if direction == "prev":
             # 向上搜索
             pos = self.code_text.search(search_text, start_pos, '1.0', backwards=True)
-            if not pos and start_pos != '1.0':
-                # 如果没找到且不是从头开始，则从末尾继续搜索
+            if not pos:
+                # 如果没找到，则从末尾继续搜索
                 pos = self.code_text.search(search_text, tk.END, '1.0', backwards=True)
         else:
             # 向下搜索
@@ -1101,6 +1101,7 @@ class CodeAuditApp:
         except Exception as e:
             self.log_error(f"启动分析失败: {str(e)}\n{traceback.format_exc()}")
             messagebox.showerror("错误", f"启动分析失败: {str(e)}")
+
 
     def _handle_events(self):
         """优化的事件处理器"""
@@ -1371,12 +1372,12 @@ class CodeAuditApp:
 
         # 根据文件类型调整提示词
         prompt = f"""
-        你是一个代码审计专家结合整段代码，使用污点分析+AST分析对代码的语义信息进行安全分析，代码没有漏洞或者不确定没有把握是否存在漏洞的就在漏洞类型处写无，严格按照以下JSON格式返回结果：
+        你是一个代码审计专家结合整段代码分析传参处理有没有可控点，使用污点分析+AST分析对代码的语义信息进行安全分析，代码没有漏洞或者不确定没有把握是否存在漏洞的就在漏洞类型处写无，严格按照以下JSON格式返回结果：
         {{
             "文件路径": "{str(file_path)}",
             "行号": [行号1, 行号2, ...],
             "风险等级": "高危/中危/低危",
-            "漏洞类型": "代码执行...",
+            "漏洞类型": "代码执行/文件上传/XXE...",
             "详细描述": "漏洞具体描述",
             "风险点": "代码片段",
             "Payload": "实际攻击代码/输入示例",
@@ -2336,7 +2337,7 @@ Payload：{values[6]}
             all_vulnerabilities = []
 
             # 支持多线程处理的文件类型
-            multi_thread_exts = ['.xml', '.php', '.java', '.php']
+            multi_thread_exts = ['.xml', '.php', '.java','.php']
 
             # 检查是否使用多线程处理
             use_multi_thread = False
@@ -2584,14 +2585,14 @@ Payload：{values[6]}
                 future_to_chunk = {}  # 创建future到chunk的映射字典
                 active_futures = set()  # 跟踪活动的future
                 i = 0
-
+                
                 # 处理所有块，直到全部完成或取消
                 while i < len(chunks) or active_futures:
                     # 检查是否已取消分析
                     if hasattr(self, 'auto_analysis_cancelled') and self.auto_analysis_cancelled:
                         self.log_info(f"分析已取消，停止提交任务")
                         break
-
+                    
                     # 检查是否暂停
                     if hasattr(self, 'auto_analysis_paused') and self.auto_analysis_paused:
                         self.log_info(f"分析已暂停，等待继续提交任务")
@@ -2599,10 +2600,10 @@ Payload：{values[6]}
                         if active_futures:
                             # 等待任意一个任务完成
                             done, active_futures = concurrent.futures.wait(
-                                active_futures,
+                                active_futures, 
                                 return_when=concurrent.futures.FIRST_COMPLETED
                             )
-
+                            
                             # 处理完成的任务
                             for future in done:
                                 self._handle_completed_future(future, futures, file_path)
@@ -2616,7 +2617,7 @@ Payload：{values[6]}
                                 break
                             self.log_info(f"分析继续，继续提交任务")
                         continue
-
+                    
                     # 提交新任务（如果还有未处理的块）
                     if i < len(chunks) and len(active_futures) < max_workers:
                         chunk_info = chunks[i]
@@ -2626,14 +2627,14 @@ Payload：{values[6]}
                         active_futures.add(future)
                         i += 1
                         continue
-
+                    
                     # 如果没有新任务可提交或已达到最大工作线程数，等待任意一个任务完成
                     if active_futures:
                         done, active_futures = concurrent.futures.wait(
-                            active_futures,
+                            active_futures, 
                             return_when=concurrent.futures.FIRST_COMPLETED
                         )
-
+                        
                         # 处理完成的任务
                         for future in done:
                             self._handle_completed_future(future, futures, file_path)
