@@ -21,7 +21,8 @@ config.ini配置API密钥
 ```bash
 python DeepAudit.py
 ```
-![image](https://github.com/user-attachments/assets/41d926e7-008c-4d9b-9cb9-2edf0794bf9d)
+![image](https://github.com/user-attachments/assets/1128db72-6702-46af-8552-9b129858e20b)
+
 
 
 📂 未完成模块
