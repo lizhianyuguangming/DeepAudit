@@ -340,7 +340,7 @@ class CodeAuditApp:
         # 更新按钮状态
         self.btn_auto_analyze.config(text="取消分析")
         self.btn_analyze.config(state=tk.DISABLED)
-        self.btn_pause_resume.config(state=tk.NORMAL)
+        # self.btn_pause_resume.config(state=tk.NORMAL)
 
         # 获取项目中所有文件
         all_files = []
@@ -498,11 +498,6 @@ class CodeAuditApp:
         self.btn_analyze = ttk.Button(self.toolbar, text="开始分析", command=self.toggle_analysis)
         self.btn_analyze.pack(side=tk.LEFT, padx=5)
 
-        # 添加自动分析控制按钮
-        self.btn_pause_resume = ttk.Button(self.toolbar, text="暂停", command=self.toggle_pause_resume,
-                                           state=tk.DISABLED)
-        self.btn_pause_resume.pack(side=tk.LEFT, padx=5)
-
         # 自动分析按钮
         self.btn_auto_analyze = ttk.Button(self.toolbar, text="自动分析", command=self.toggle_auto_analysis)
         self.btn_auto_analyze.pack(side=tk.LEFT, padx=2)
@@ -535,24 +530,11 @@ class CodeAuditApp:
             # 确保按钮状态立即更新为"自动分析"
             self.btn_auto_analyze.config(text="自动分析")
 
-    def toggle_pause_resume(self):
-        """切换暂停/继续状态"""
-        self.auto_analysis_paused = not self.auto_analysis_paused
-        if self.auto_analysis_paused:
-            self.btn_pause_resume.config(text="继续")
-            self.status_bar.config(text="分析已暂停")
-        else:
-            self.btn_pause_resume.config(text="暂停")
-            self.status_bar.config(text="分析继续中...")
-
     def cancel_analysis(self):
         """取消分析操作"""
         # 先设置取消标志
         self.auto_analysis_cancelled = True
         self.status_bar.config(text="正在取消分析...")
-
-        # 只禁用暂停/继续按钮
-        self.btn_pause_resume.config(state=tk.DISABLED)
 
         # 立即恢复按钮状态，不等待事件处理
         self.btn_analyze.config(text="开始分析", state=tk.NORMAL)
@@ -577,8 +559,6 @@ class CodeAuditApp:
             self.btn_analyze.config(text="开始分析", state=tk.NORMAL)
         if hasattr(self, 'btn_auto_analyze'):
             self.btn_auto_analyze.config(text="自动分析", state=tk.NORMAL)
-        if hasattr(self, 'btn_pause_resume'):
-            self.btn_pause_resume.config(state=tk.DISABLED, text="暂停")
 
     def _init_right_panel(self, parent):
         """初始化右侧面板（修改为使用PanedWindow）"""
@@ -1103,10 +1083,6 @@ class CodeAuditApp:
             # 更改按钮文本和状态
             self.btn_analyze.config(text="取消分析", command=self.cancel_analysis)
 
-            # 启用暂停按钮
-            if hasattr(self, 'btn_pause_resume'):
-                self.btn_pause_resume.config(state=tk.NORMAL)
-
             # 更新状态栏
             self.status_bar.config(text=f"准备分析 {len(file_list)} 个文件...")
 
@@ -1125,11 +1101,6 @@ class CodeAuditApp:
         except Exception as e:
             self.log_error(f"启动分析失败: {str(e)}\n{traceback.format_exc()}")
             messagebox.showerror("错误", f"启动分析失败: {str(e)}")
-
-            # 恢复按钮状态
-            self.btn_analyze.config(text="开始分析", command=self.start_analysis)
-            if hasattr(self, 'btn_pause_resume'):
-                self.btn_pause_resume.config(state=tk.DISABLED)
 
     def _handle_events(self):
         """优化的事件处理器"""
@@ -1189,8 +1160,6 @@ class CodeAuditApp:
                             # 恢复其他按钮状态
                             if hasattr(self, 'btn_auto_analyze'):
                                 self.btn_auto_analyze.config(text="自动分析", state=tk.NORMAL)
-                            if hasattr(self, 'btn_pause_resume'):
-                                self.btn_pause_resume.config(state=tk.DISABLED, text="暂停")
                             if hasattr(self, 'btn_export'):
                                 self.btn_export.config(state=tk.NORMAL)
 
@@ -2367,7 +2336,7 @@ Payload：{values[6]}
             all_vulnerabilities = []
 
             # 支持多线程处理的文件类型
-            multi_thread_exts = ['.xml', '.php', '.java','.php']
+            multi_thread_exts = ['.xml', '.php', '.java', '.php']
 
             # 检查是否使用多线程处理
             use_multi_thread = False
@@ -2463,6 +2432,24 @@ Payload：{values[6]}
             print(f"[ERROR] 智能分块分析失败: {str(e)}")
             self.event_queue.put(('progress', None, None))
             self.event_queue.put(('done', None, None))  # 确保异常时发送完成事件
+
+    def _handle_completed_future(self, future, futures, file_path):
+        """处理已完成的任务"""
+        # 查找对应的任务信息
+        for f, (i, chunk_info) in futures:
+            if f == future:
+                chunk, line_start, line_end, chunk_type = chunk_info
+                try:
+                    # 获取结果
+                    result = future.result()
+                    if result:
+                        print(f"[DEBUG] 线程处理完成第 {i + 1} 块")
+                    else:
+                        print(f"[DEBUG] 线程处理第 {i + 1} 块失败或无结果")
+                except Exception as e:
+                    print(f"[ERROR] 线程处理第 {i + 1} 块异常: {str(e)}")
+                    self.log_error(f"线程处理第 {i + 1} 块异常: {str(e)}", file_path)
+                break
 
     def _process_chunks_with_threads(self, file_path, chunks, file_ext, all_vulnerabilities):
         """使用多线程处理代码块"""
@@ -2592,14 +2579,75 @@ Payload：{values[6]}
         try:
             # 创建线程池
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                # 提交所有任务
-                future_to_chunk = {executor.submit(process_chunk, (i, chunk_info)): (i, chunk_info)
-                                   for i, chunk_info in enumerate(chunks)}
+                # 不再一次性提交所有任务，而是逐个提交并检查暂停状态
+                futures = []
+                future_to_chunk = {}  # 创建future到chunk的映射字典
+                active_futures = set()  # 跟踪活动的future
+                i = 0
+
+                # 处理所有块，直到全部完成或取消
+                while i < len(chunks) or active_futures:
+                    # 检查是否已取消分析
+                    if hasattr(self, 'auto_analysis_cancelled') and self.auto_analysis_cancelled:
+                        self.log_info(f"分析已取消，停止提交任务")
+                        break
+
+                    # 检查是否暂停
+                    if hasattr(self, 'auto_analysis_paused') and self.auto_analysis_paused:
+                        self.log_info(f"分析已暂停，等待继续提交任务")
+                        # 只等待已提交的任务完成，不提交新任务
+                        if active_futures:
+                            # 等待任意一个任务完成
+                            done, active_futures = concurrent.futures.wait(
+                                active_futures,
+                                return_when=concurrent.futures.FIRST_COMPLETED
+                            )
+
+                            # 处理完成的任务
+                            for future in done:
+                                self._handle_completed_future(future, futures, file_path)
+                        else:
+                            # 如果没有活动任务，则等待继续
+                            while self.auto_analysis_paused and not self.auto_analysis_cancelled:
+                                time.sleep(0.5)
+                            # 再次检查是否已取消
+                            if self.auto_analysis_cancelled:
+                                self.log_info(f"分析已取消，停止提交任务")
+                                break
+                            self.log_info(f"分析继续，继续提交任务")
+                        continue
+
+                    # 提交新任务（如果还有未处理的块）
+                    if i < len(chunks) and len(active_futures) < max_workers:
+                        chunk_info = chunks[i]
+                        future = executor.submit(process_chunk, (i, chunk_info))
+                        futures.append((future, (i, chunk_info)))
+                        future_to_chunk[future] = (i, chunk_info)
+                        active_futures.add(future)
+                        i += 1
+                        continue
+
+                    # 如果没有新任务可提交或已达到最大工作线程数，等待任意一个任务完成
+                    if active_futures:
+                        done, active_futures = concurrent.futures.wait(
+                            active_futures,
+                            return_when=concurrent.futures.FIRST_COMPLETED
+                        )
+
+                        # 处理完成的任务
+                        for future in done:
+                            self._handle_completed_future(future, futures, file_path)
+                            # 从future_to_chunk中移除已处理的future
+                            if future in future_to_chunk:
+                                del future_to_chunk[future]
+                    else:
+                        # 所有任务都已完成
+                        break
 
                 # 处理完成的任务
                 completed = 0
-                for future in concurrent.futures.as_completed(future_to_chunk):
-                    i, chunk_info = future_to_chunk[future]
+                # 使用futures列表中的future进行处理，而不是future_to_chunk
+                for future, (i, chunk_info) in futures:
                     chunk, line_start, line_end, chunk_type = chunk_info
                     completed += 1
 
