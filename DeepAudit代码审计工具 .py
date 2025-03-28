@@ -191,15 +191,15 @@ class CodeAuditApp:
 
             # 设置列宽 - 使用更合适的宽度单位，openpyxl中的宽度单位约为Excel中的0.14倍
             column_widths = {
-                'A': 4,     # ID
-                'B': 12,    # 漏洞类型
-                'C': 12,    # 风险等级
-                'D': 50,    # 文件路径
-                'E': 60,    # 漏洞描述
-                'F': 40,    # 风险点
-                'G': 40,    # Payload
-                'H': 60,    # 修复建议
-                'I': 10,     # 行号
+                'A': 4,  # ID
+                'B': 12,  # 漏洞类型
+                'C': 12,  # 风险等级
+                'D': 50,  # 文件路径
+                'E': 60,  # 漏洞描述
+                'F': 40,  # 风险点
+                'G': 40,  # Payload
+                'H': 60,  # 修复建议
+                'I': 10,  # 行号
             }
 
             # 强制设置列宽并确保应用
@@ -293,7 +293,7 @@ class CodeAuditApp:
                     # 设置行高为自动调整
                     if hasattr(ws, 'row_dimensions'):
                         ws.row_dimensions[row_num].height = None  # 设置为None让Excel自动调整行高
-                    
+
                     for col_num, value in enumerate(values, 1):
                         cell = ws.cell(row=row_num, column=col_num)
                         if cell is not None:
@@ -412,22 +412,14 @@ class CodeAuditApp:
         container = ttk.Frame(self.left_panel)
         container.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # 垂直滚动条
-        vsb = tk.Scrollbar(container, orient=tk.VERTICAL, width=10)
-        vsb.pack(side=tk.RIGHT, fill=tk.Y)
-
-        # 树状视图
+        # 树状视图 - 移除垂直滚动条
         self.tree = ttk.Treeview(
             container,
-            yscrollcommand=lambda f, l: self._update_scrollbar(f, l, vsb),
             selectmode='browse',
             show='tree',
             height=20
         )
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        # 配置滚动条
-        vsb.config(command=self.tree.yview)
 
         # 动态列宽配置
         self.tree.column("#0", minwidth=200, stretch=tk.YES)
@@ -456,7 +448,7 @@ class CodeAuditApp:
     def _update_scrollbar(self, first, last, scrollbar):
         """更新滚动条位置并确保其可见性"""
         scrollbar.set(first, last)
-        
+
         # 始终显示垂直滚动条，不再根据滚动范围隐藏
         # 这样可以确保滚动条始终可见且易于点击
         scrollbar.pack(expand=False, fill=tk.Y, side=tk.RIGHT)
@@ -571,7 +563,7 @@ class CodeAuditApp:
             self.progress_var.set(0)
         if hasattr(self, 'progress'):
             self.progress['value'] = 0
-            
+
         # 更新漏洞列表视图，确保已扫描出的漏洞能显示在界面上
         self.update_vulnerability_treeview()
 
@@ -1071,10 +1063,11 @@ class CodeAuditApp:
         """开始分析（优化后的多线程版本）"""
         try:
             # 检查是否已有分析线程在运行
-            if hasattr(self, 'auto_analysis_thread') and self.auto_analysis_thread and self.auto_analysis_thread.is_alive():
+            if hasattr(self,
+                       'auto_analysis_thread') and self.auto_analysis_thread and self.auto_analysis_thread.is_alive():
                 messagebox.showinfo("提示", "已有分析任务正在运行，请等待完成或取消当前任务")
                 return
-                
+
             # 获取选中的文件列表
             file_list = self._get_selected_files()
 
@@ -1082,12 +1075,12 @@ class CodeAuditApp:
             if not file_list:
                 messagebox.showinfo("提示", "请先选择要分析的文件")
                 return
-                
+
             # 检查API密钥是否已配置
             if not self.api_key:
                 messagebox.showwarning("警告", "API密钥未配置，请先在设置中配置API密钥")
                 return
-                
+
             # 记录开始分析
             self.log_info(f"开始分析任务，选中文件数: {len(file_list)}")
 
@@ -1098,7 +1091,7 @@ class CodeAuditApp:
             # 重置分析状态
             self.auto_analysis_cancelled = False
             self.auto_analysis_paused = False
-            
+
             # 清空事件队列，避免之前的事件影响当前分析
             try:
                 while True:
@@ -1113,7 +1106,7 @@ class CodeAuditApp:
             # 启用暂停按钮
             if hasattr(self, 'btn_pause_resume'):
                 self.btn_pause_resume.config(state=tk.NORMAL)
-                
+
             # 更新状态栏
             self.status_bar.config(text=f"准备分析 {len(file_list)} 个文件...")
 
@@ -1126,13 +1119,13 @@ class CodeAuditApp:
             )
             self.auto_analysis_thread.start()
             self.root.after(100, self._handle_events)
-            
+
             # 记录线程启动
             self.log_info(f"分析线程已启动，线程ID: {self.auto_analysis_thread.ident}")
         except Exception as e:
             self.log_error(f"启动分析失败: {str(e)}\n{traceback.format_exc()}")
             messagebox.showerror("错误", f"启动分析失败: {str(e)}")
-            
+
             # 恢复按钮状态
             self.btn_analyze.config(text="开始分析", command=self.start_analysis)
             if hasattr(self, 'btn_pause_resume'):
@@ -1144,12 +1137,12 @@ class CodeAuditApp:
             # 限制每次处理的事件数量，防止UI阻塞
             max_events_per_cycle = 10
             events_processed = 0
-            
+
             while events_processed < max_events_per_cycle:
                 try:
                     event_type, data, callback = self.event_queue.get_nowait()
                     events_processed += 1
-                    
+
                     # 如果分析已取消，不再处理进度更新事件
                     if self.auto_analysis_cancelled and event_type == 'progress':
                         self.event_queue.task_done()  # 确保标记任务完成
@@ -1214,16 +1207,16 @@ class CodeAuditApp:
                             # 清理线程引用，避免状态混乱
                             if hasattr(self, 'auto_analysis_thread'):
                                 delattr(self, 'auto_analysis_thread')
-                                
+
                             # 标记任务完成
                             self.event_queue.task_done()
-                            
+
                             # 继续事件循环，但不处理更多事件
                             self.root.after(100, self._handle_events)
                             return  # 结束当前循环
                         except Exception as e:
                             self.log_error(f"处理完成事件失败: {str(e)}")
-                    
+
                     # 处理API验证事件
                     elif event_type == 'api_validation':
                         try:
@@ -1234,17 +1227,17 @@ class CodeAuditApp:
                                 self.status_bar.config(text="API密钥验证失败")
                         except Exception as e:
                             self.log_error(f"处理API验证事件失败: {str(e)}")
-                    
+
                     # 执行回调函数（如果有）
                     if callback:
                         try:
                             callback()
                         except Exception as e:
                             self.log_error(f"执行回调函数失败: {str(e)}")
-                    
+
                     # 标记任务完成
                     self.event_queue.task_done()
-                    
+
                 except queue.Empty:  # 队列为空时退出循环
                     break
                 except Exception as e:
@@ -1319,12 +1312,12 @@ class CodeAuditApp:
         """优化的后台分析线程"""
         start_time = time.time()
         self.log_info(f"开始分析任务，文件数量: {len(file_list)}")
-        
+
         try:
             # 计算总分块数量
             total_chunks = 0
             valid_files = []
-            
+
             for file_path in file_list:
                 if self.auto_analysis_cancelled:
                     self.log_info("分析已取消，停止预处理")
@@ -1334,7 +1327,7 @@ class CodeAuditApp:
                 if not file_path.exists():
                     self.log_error(f"文件不存在，跳过: {file_path}")
                     continue
-                    
+
                 # 读取文件内容以估计分块数量
                 try:
                     with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -1350,7 +1343,7 @@ class CodeAuditApp:
                     else:
                         # 小文件算作1个分块
                         total_chunks += 1
-                    
+
                     # 添加到有效文件列表
                     valid_files.append(file_path)
                 except Exception as e:
@@ -1364,7 +1357,7 @@ class CodeAuditApp:
                 self.log_info("没有有效文件可分析")
                 self.root.after(0, lambda: self.status_bar.config(text="没有有效文件可分析"))
                 return
-                
+
             # 设置进度条最大值为总分块数
             self.root.after(0, lambda: self.progress.configure(maximum=total_chunks))
             self.root.after(0, lambda: self.status_bar.config(text=f"准备分析 {total_chunks} 个代码块"))
@@ -1373,11 +1366,11 @@ class CodeAuditApp:
             import concurrent.futures
             max_workers = min(10, len(valid_files))  # 限制最大线程数
             self.log_info(f"启动分析线程池，最大线程数: {max_workers}")
-            
+
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                 # 提交所有文件分析任务
                 future_to_file = {executor.submit(self.analyze_file, file_path): file_path for file_path in valid_files}
-                
+
                 # 处理完成的任务
                 for future in concurrent.futures.as_completed(future_to_file):
                     file_path = future_to_file[future]
@@ -1393,7 +1386,7 @@ class CodeAuditApp:
             # 记录总耗时
             elapsed_time = time.time() - start_time
             self.log_info(f"分析任务完成，总耗时: {elapsed_time:.2f}秒")
-            
+
             # 确保总是发送done事件，无论是否发生异常
             self.event_queue.put(('done', None, None))
 
@@ -2185,7 +2178,7 @@ Payload：{values[6]}
         """分析单个文件"""
         start_time = time.time()
         self.log_info(f"开始分析文件: {file_path.name}, 后缀: {file_path.suffix}")
-        
+
         try:
             # 检查是否已取消分析
             if hasattr(self, 'auto_analysis_cancelled') and self.auto_analysis_cancelled:
@@ -2245,9 +2238,9 @@ Payload：{values[6]}
             if hasattr(self, 'auto_analysis_cancelled') and self.auto_analysis_cancelled:
                 self.log_info(f"分析已取消，跳过文件: {file_path.name}")
                 return
-                
+
             # 根据文件大小和类型决定分析方法
-            if len(code_lines) > 1000 or file_path.suffix.lower() in ['.xml', '.pom']:
+            if len(code_lines) > 1000 or file_path.suffix.lower() in ['.xml', '.pom', '.java', '.php']:
                 self.analyze_large_file(file_path, code_lines, code)
             else:
                 self.analyze_small_file(file_path, code_lines, code)
@@ -2260,43 +2253,50 @@ Payload：{values[6]}
         try:
             # 获取文件扩展名
             file_ext = file_path.suffix.lower()
-            
+
             # 检查是否已取消分析
             if hasattr(self, 'auto_analysis_cancelled') and self.auto_analysis_cancelled:
                 print(f"[DEBUG] 分析已取消，停止处理 {file_path.name}")
                 self.log_info(f"分析已取消，停止处理 {file_path.name}")
                 self.event_queue.put(('progress', None, None))
                 return
-                
+
             # 记录开始分析
             print(f"[DEBUG] 开始分析小文件: {file_path.name}")
             self.log_info(f"开始分析小文件: {file_path.name}")
-            
+
             # 更新状态栏
             self.status_bar.config(text=f"正在分析: {file_path.name}")
-            
+
+            # 对于Java文件，即使是小文件也进行分块处理
+            if file_ext == '.java':
+                print(f"[DEBUG] 检测到Java文件: {file_path.name}，使用智能分块")
+                self.log_info(f"检测到Java文件: {file_path.name}，使用智能分块")
+                self.analyze_large_file(file_path, code_lines, code)
+                return
+
             # 添加文件信息和上下文提示
             context_info = f"# 文件: {file_path.name}\n"
             context_info += f"# 行数: {len(code_lines)}\n\n"
-            
+
             # 构建带上下文的代码
             code_with_context = context_info + code
-            
+
             # 调用API分析文件
             response = self.call_deepseek_api(code_with_context, file_ext, file_path)
-            
+
             # 检查是否已取消分析
             if hasattr(self, 'auto_analysis_cancelled') and self.auto_analysis_cancelled:
                 return
-                
+
             if response['status_code'] == 200:
                 # 解析结果
                 vulnerabilities = self.parse_response(response['text'], code_lines)
-                
+
                 # 确保文件路径正确
                 for vuln in vulnerabilities:
                     vuln["文件路径"] = str(file_path)
-                
+
                 # 显示结果
                 if vulnerabilities:
                     self.display_results(file_path, vulnerabilities)
@@ -2307,15 +2307,15 @@ Payload：{values[6]}
                     self.log_info(f"{file_path.name} 分析完成，未发现漏洞")
             else:
                 self.log_error(f"分析失败: {response['text'][:200]}", file_path)
-                
+
             # 更新进度
             self.event_queue.put(('progress', None, None))
-            
+
         except Exception as e:
             self.log_error(f"小文件分析失败: {str(e)}", file_path)
             print(f"[ERROR] 小文件分析失败: {str(e)}")
             self.event_queue.put(('progress', None, None))
-            
+
     def analyze_large_file(self, file_path, code_lines, full_code):
         """智能分块处理大文件，根据代码结构进行分块"""
         try:
@@ -2367,7 +2367,7 @@ Payload：{values[6]}
             all_vulnerabilities = []
 
             # 支持多线程处理的文件类型
-            multi_thread_exts = ['.xml', '.php', '.java']
+            multi_thread_exts = ['.xml', '.php', '.java','.php']
 
             # 检查是否使用多线程处理
             use_multi_thread = False
@@ -2523,7 +2523,8 @@ Payload：{values[6]}
                 try:
                     response = self.call_deepseek_api(chunk_with_context, file_ext, file_path)
                 except Exception as e:
-                    self.log_error(f"API调用失败，块 {i + 1}/{len(chunks)}: {str(e)}\n{traceback.format_exc()}", file_path)
+                    self.log_error(f"API调用失败，块 {i + 1}/{len(chunks)}: {str(e)}\n{traceback.format_exc()}",
+                                   file_path)
                     self.event_queue.put(('progress', None, None))
                     return None
 
@@ -2565,14 +2566,15 @@ Payload：{values[6]}
 
                         # 更新进度
                         self.event_queue.put(('progress', None, None))
-                        
+
                         # 记录处理时间
                         chunk_time = time.time() - chunk_start_time
                         print(f"[DEBUG] 线程处理完成第 {i + 1}/{len(chunks)} 块，耗时: {chunk_time:.2f}秒")
 
                         return chunk_vulnerabilities
                     except Exception as e:
-                        self.log_error(f"解析响应失败，块 {i + 1}/{len(chunks)}: {str(e)}\n{traceback.format_exc()}", file_path)
+                        self.log_error(f"解析响应失败，块 {i + 1}/{len(chunks)}: {str(e)}\n{traceback.format_exc()}",
+                                       file_path)
                         self.event_queue.put(('progress', None, None))
                         return None
                 else:
@@ -2581,7 +2583,8 @@ Payload：{values[6]}
                     self.event_queue.put(('progress', None, None))
                     return None
             except Exception as e:
-                self.log_error(f"线程处理第 {i + 1}/{len(chunks)} 块异常: {str(e)}\n{traceback.format_exc()}", file_path)
+                self.log_error(f"线程处理第 {i + 1}/{len(chunks)} 块异常: {str(e)}\n{traceback.format_exc()}",
+                               file_path)
                 # 确保异常情况下也更新进度
                 self.event_queue.put(('progress', None, None))
                 return None
@@ -2591,7 +2594,7 @@ Payload：{values[6]}
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                 # 提交所有任务
                 future_to_chunk = {executor.submit(process_chunk, (i, chunk_info)): (i, chunk_info)
-                                for i, chunk_info in enumerate(chunks)}
+                                   for i, chunk_info in enumerate(chunks)}
 
                 # 处理完成的任务
                 completed = 0
@@ -2610,7 +2613,7 @@ Payload：{values[6]}
                     except Exception as e:
                         print(f"[ERROR] 线程处理第 {i + 1}/{len(chunks)} 块异常: {str(e)}")
                         self.log_error(f"线程处理第 {i + 1}/{len(chunks)} 块异常: {str(e)}", file_path)
-                    
+
                     # 更新进度信息
                     progress_percent = int(completed / len(chunks) * 100)
                     self.log_info(f"多线程处理进度: {completed}/{len(chunks)} ({progress_percent}%)")
@@ -2619,8 +2622,9 @@ Payload：{values[6]}
         finally:
             # 记录总耗时
             total_time = time.time() - start_time
-            self.log_info(f"多线程处理完成: {file_path.name}, 总耗时: {total_time:.2f}秒, 发现漏洞: {len(all_vulnerabilities)}个")
-            
+            self.log_info(
+                f"多线程处理完成: {file_path.name}, 总耗时: {total_time:.2f}秒, 发现漏洞: {len(all_vulnerabilities)}个")
+
             # 确保更新进度
             self.event_queue.put(('progress', None, None))
 
