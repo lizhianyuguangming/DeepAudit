@@ -41,6 +41,9 @@ class CodeAuditApp:
         self.progress_var = tk.IntVar(value=0)
         self.progress_bar = None
         self.files_to_analyze = []
+        
+        # 添加API验证状态标志，用于记录API是否已验证成功
+        self.api_validated = False
 
         # 启动事件处理循环
         self.root.after(100, self.process_event_queue)
@@ -70,9 +73,6 @@ class CodeAuditApp:
         self._init_ui()
         self._bind_events()
 
-        # 修改初始化顺序
-        self.root.after(100, self.delayed_config_init)
-
         # 添加全局ID计数器
         self.vuln_id_counter = 1
 
@@ -80,6 +80,16 @@ class CodeAuditApp:
         self.auto_analysis_paused = False
         self.auto_analysis_cancelled = False
         self.auto_analysis_thread = None
+        
+        # 修改初始化顺序，立即开始配置初始化
+        self.delayed_config_init()
+        
+        # 如果有API密钥，立即开始验证
+        if self.api_key:
+            self.status_bar.config(text="正在验证API密钥...")
+            self.validation_start_time = time.time()
+            self._validate_api_key()
+            self.root.after(100, self.check_initial_validation)
 
     def _init_configuration(self):
         """统一配置初始化"""
@@ -332,6 +342,51 @@ class CodeAuditApp:
 
     def auto_analyze(self):
         """自动分析项目中所有文件"""
+        # 检查API密钥是否已配置
+        if not self.api_key:
+            messagebox.showwarning("警告", "API密钥未配置，请先在设置中配置API密钥")
+            return False
+            
+        # 如果API尚未验证过，则进行验证
+        if not hasattr(self, 'api_validated') or not self.api_validated:
+            # 显示提示信息
+            messagebox.showwarning("API验证", "API密钥尚未验证，将进行验证...")
+            # 验证API密钥是否有效
+            try:
+                session = requests.Session()
+                request_headers = {"Authorization": f"Bearer {self.api_key}"}
+                request_body = {"model": "deepseek-chat", "messages": [{"role": "user", "content": "ping"}],
+                                "max_tokens": 1}
+                
+                response = session.post(
+                    self.api_endpoint,
+                    headers=request_headers,
+                    json=request_body,
+                    timeout=(3, 10)  # 连接超时3秒，读取超时10秒
+                )
+                
+                if response.status_code != 200:
+                    error_msg = f"API密钥验证失败，状态码: {response.status_code}"
+                    if response.text:
+                        try:
+                            error_data = json.loads(response.text)
+                            if 'error' in error_data and 'message' in error_data['error']:
+                                error_msg += f"\n错误信息: {error_data['error']['message']}"
+                        except:
+                            error_msg += f"\n响应内容: {response.text[:100]}"
+                    
+                    messagebox.showerror("API验证失败", error_msg)
+                    self.status_bar.config(text="API密钥无效，无法进行分析")
+                    return False
+                else:
+                    # 验证成功，设置API验证状态为已验证成功
+                    self.api_validated = True
+                    messagebox.showinfo("API验证", "API密钥验证成功！")
+            except Exception as e:
+                messagebox.showerror("API连接失败", f"无法连接到API服务器: {str(e)}")
+                self.status_bar.config(text="API连接失败，请检查网络")
+                return False
+            
         # 初始化状态
         self._reset_analysis_state()
         self.auto_analysis_cancelled = False
@@ -366,6 +421,7 @@ class CodeAuditApp:
         )
         self.auto_analysis_thread.start()
         self.root.after(100, self._handle_events)
+        return True
 
     def _auto_analysis_worker(self, file_list):
         """自动分析的后台线程"""
@@ -1002,24 +1058,54 @@ class CodeAuditApp:
         self.root.after(500, self.check_initial_validation)
 
     def check_initial_validation(self):
-        """检查初始验证结果"""
+        """检查初始验证结果 - 优化版本"""
         try:
             event_type, result, _ = self.event_queue.get_nowait()
             if event_type == 'api_validation':
                 if result:
-                    self.delayed_init()
+                    # API验证成功
+                    self.api_validated = True
+                    if hasattr(self, 'delayed_init'):
+                        self.delayed_init()
                     self.status_bar.config(text="就绪")
+                    # 确保分析按钮可用
+                    if hasattr(self, 'btn_analyze'):
+                        self.btn_analyze.config(state=tk.NORMAL)
+                    if hasattr(self, 'btn_auto_analyze'):
+                        self.btn_auto_analyze.config(state=tk.NORMAL)
                 else:
-                    self.status_bar.config(text="API密钥无效")
+                    # API验证失败，显示明确的错误提示并禁用分析按钮
+                    self.api_validated = False
+                    self.status_bar.config(text="API密钥无效，请检查配置")
+                    # 使用after方法延迟显示消息框，避免阻塞UI
+                    self.root.after(100, lambda: messagebox.showerror("API验证失败", "API密钥验证失败，请检查API密钥是否正确。分析功能将被禁用。"))
+                    # 禁用分析按钮
+                    if hasattr(self, 'btn_analyze'):
+                        self.btn_analyze.config(state=tk.DISABLED)
+                    if hasattr(self, 'btn_auto_analyze'):
+                        self.btn_auto_analyze.config(state=tk.DISABLED)
                 return
         except Empty:
             current_time = time.time()
             time_elapsed = current_time - self.validation_start_time
 
-            if time_elapsed > 8:
-                self.status_bar.config(text="API服务器响应超时")
+            if time_elapsed > 15:  # 增加超时时间到15秒
+                self.api_validated = False
+                self.status_bar.config(text="API服务器响应超时，请检查网络连接")
+                # 使用after方法延迟显示消息框，避免阻塞UI
+                self.root.after(100, lambda: messagebox.showwarning("API验证超时", "API服务器响应超时，请检查网络连接。分析功能将被禁用。"))
+                # 禁用分析按钮
+                if hasattr(self, 'btn_analyze'):
+                    self.btn_analyze.config(state=tk.DISABLED)
+                if hasattr(self, 'btn_auto_analyze'):
+                    self.btn_auto_analyze.config(state=tk.DISABLED)
+                # 添加重试按钮
+                retry_button = tk.Button(self.root, text="重试验证", command=self.retry_api_validation)
+                retry_button.place(relx=0.5, rely=0.5, anchor="center")
+                self.root.after(3000, retry_button.destroy)  # 3秒后自动移除按钮
                 return
-        self.root.after(100, self.check_initial_validation)
+        # 缩短检查间隔到50毫秒，加快响应速度
+        self.root.after(50, self.check_initial_validation)
 
     def search_text(self, forward=True):
         """执行文本搜索"""
@@ -1081,6 +1167,64 @@ class CodeAuditApp:
             if not self.api_key:
                 messagebox.showwarning("警告", "API密钥未配置，请先在设置中配置API密钥")
                 return False
+                
+            # 如果API已经验证过且有效，直接继续分析流程
+            if hasattr(self, 'api_validated') and self.api_validated:
+                # API已验证，直接继续
+                pass
+            # 如果API尚未验证过，则进行异步验证
+            elif not hasattr(self, 'api_validated') or not self.api_validated:
+                # 显示验证中的状态
+                self.status_bar.config(text="正在验证API密钥...")
+                self.root.config(cursor="wait")  # 更改鼠标指针为等待状态
+                
+                # 启动异步验证
+                self._validate_api_key()
+                
+                # 验证超时计时
+                validation_start_time = time.time()
+                
+                # 检查验证结果的函数
+                def check_validation():
+                    try:
+                        # 尝试从事件队列获取验证结果
+                        event_type, result, _ = self.event_queue.get_nowait()
+                        
+                        if event_type == 'api_validation':
+                            self.root.config(cursor="")  # 恢复鼠标指针
+                            
+                            if result:
+                                # 验证成功，继续分析流程
+                                self.api_validated = True
+                                self.status_bar.config(text="API密钥验证成功，开始分析...")
+                                # 重新调用分析方法
+                                self.root.after(10, self.start_analysis)  # 缩短延迟到10ms，加快响应
+                            else:
+                                # 验证失败
+                                self.status_bar.config(text="API密钥无效，无法进行分析")
+                                messagebox.showerror("API验证失败", "API密钥验证失败，请检查API密钥是否正确。")
+                            return
+                    except queue.Empty:
+                        # 检查是否超时
+                        current_time = time.time()
+                        if current_time - validation_start_time > 15:  # 增加超时时间到15秒
+                            self.root.config(cursor="")
+                            self.status_bar.config(text="API连接超时，请检查网络")
+                            messagebox.showwarning("API验证超时", "API服务器响应超时，请检查网络连接。")
+                            # 添加重试按钮
+                            retry_button = tk.Button(self.root, text="重试验证", command=self.retry_api_validation)
+                            retry_button.place(relx=0.5, rely=0.5, anchor="center")
+                            self.root.after(3000, retry_button.destroy)  # 3秒后自动移除按钮
+                            return
+                        
+                        # 继续等待验证结果
+                        self.root.after(20, check_validation)  # 缩短检查间隔到20ms
+                
+                # 开始检查验证结果
+                self.root.after(20, check_validation)
+                
+                # 等待验证完成后再继续
+                return False
 
             # 记录开始分析
             self.log_info(f"开始分析任务，选中文件数: {len(file_list)}")
@@ -1119,9 +1263,11 @@ class CodeAuditApp:
 
             # 记录线程启动
             self.log_info(f"分析线程已启动，线程ID: {self.auto_analysis_thread.ident}")
+            return True
         except Exception as e:
             self.log_error(f"启动分析失败: {str(e)}\n{traceback.format_exc()}")
             messagebox.showerror("错误", f"启动分析失败: {str(e)}")
+            return False
 
 
     def _handle_events(self):
@@ -1470,44 +1616,62 @@ class CodeAuditApp:
             self.config.write(f)
 
     def _validate_api_key(self):
-        """异步验证API密钥有效性"""
-        print(f"[DEBUG][{time.time()}] 启动验证线程，终端: {self.api_endpoint}")
+        """异步验证API密钥有效性 - 优化版本"""
+        # 如果API已经验证过且有效，直接返回True
+        if hasattr(self, 'api_validated') and self.api_validated:
+            # 直接将验证成功的结果放入事件队列，以便调用者可以处理
+            self.event_queue.put(('api_validation', True, None))
+            return True
 
         def validate_worker():
             try:
                 start_time = time.time()
-                print(f"[DEBUG][{start_time}] 验证线程开始")
-
-                # 实际执行验证请求
+                
+                # 实际执行验证请求 - 使用最小化请求体积加快验证速度
                 session = requests.Session()
-                # 移除无意义session打印，改为记录请求数据
+                # 配置重试策略，提高验证成功率
+                retry_strategy = Retry(
+                    total=2,  # 最多重试2次
+                    backoff_factor=0.5,  # 重试间隔时间因子
+                    status_forcelist=[429, 500, 502, 503, 504],  # 需要重试的HTTP状态码
+                    allowed_methods=["POST"]  # 允许重试的HTTP方法
+                )
+                adapter = HTTPAdapter(max_retries=retry_strategy)
+                session.mount("https://", adapter)
+                
                 request_headers = {"Authorization": f"Bearer {self.api_key}"}
-                request_body = {"model": "deepseek-chat", "messages": [{"role": "user", "content": "ping"}],
+                # 使用最小化的请求体，减少数据传输量
+                request_body = {"model": "deepseek-chat", "messages": [{"role": "user", "content": ""}],
                                 "max_tokens": 1}
 
-                print(f"\n[API REQUEST][{time.time()}] 请求头: {json.dumps(request_headers, indent=2)}")
-                print(f"[API REQUEST][{time.time()}] 请求体: {json.dumps(request_body, indent=2)}")
-
+                # 增加超时时间，提高连接成功率
                 response = session.post(
                     self.api_endpoint,
                     headers=request_headers,
                     json=request_body,
-                    timeout=(3, 10)  # 连接超时3秒，读取超时10秒
+                    timeout=(5, 10)  # 连接超时5秒，读取超时10秒，提高连接成功率
                 )
-
-                # 记录响应信息
-                print(f"\n[API RESPONSE][{time.time()}] 状态码: {response.status_code}")
-                print(f"[API RESPONSE][{time.time()}] 响应内容: {response.text[:500]}")  # 截取前500字符防止日志过大
 
                 # 处理验证结果
                 is_valid = response.status_code == 200
+                if is_valid:
+                    self.api_validated = True  # 设置API验证状态为已验证成功
+                    # 更新状态栏显示
+                    self.root.after(0, lambda: self.status_bar.config(text="API密钥验证成功"))
+                else:
+                    # 验证失败时更新状态栏
+                    self.root.after(0, lambda: self.status_bar.config(text="API密钥验证失败"))
+                    
                 self.event_queue.put(('api_validation', is_valid, None))
 
-                print(f"[DEBUG][{time.time()}] 验证请求耗时: {time.time() - start_time:.2f}s")
+                print(f"[API验证][{time.time()}] 验证耗时: {time.time() - start_time:.2f}s, 结果: {is_valid}")
             except Exception as e:
-                print(f"[API ERROR][{time.time()}] 异常类型: {type(e).__name__}, 详情: {str(e)}")
+                print(f"[API错误][{time.time()}] {type(e).__name__}: {str(e)}")
+                # 验证出错时更新状态栏
+                self.root.after(0, lambda: self.status_bar.config(text=f"API验证出错: {type(e).__name__}"))
                 self.event_queue.put(('api_validation', False, None))
 
+        # 启动验证线程并立即返回
         threading.Thread(target=validate_worker, daemon=True).start()
 
     def check_validation_result(self):
@@ -1520,9 +1684,11 @@ class CodeAuditApp:
                 if result:
                     self.config['DEFAULT']['API_KEY'] = self.api_key
                     self._save_config()
+                    self.api_validated = True  # 设置API验证状态为已验证成功
                     self.status_bar.config(text="API密钥验证通过")
                     return True
                 else:
+                    self.api_validated = False  # 设置API验证状态为验证失败
                     self.status_bar.config(text="API密钥无效")
                     return False
         except Empty:
@@ -1537,6 +1703,17 @@ class CodeAuditApp:
         self.root.after(50, self.check_validation_result)
         return None
 
+    def retry_api_validation(self):
+        """重试API验证"""
+        # 重置验证状态
+        self.api_validated = False
+        # 更新状态栏
+        self.status_bar.config(text="正在重新验证API密钥...")
+        # 重新开始验证
+        self.validation_start_time = time.time()
+        self._validate_api_key()
+        self.root.after(100, self.check_initial_validation)
+        
     def log_error(self, error_msg, file_path=None):
         """记录错误日志"""
         try:
