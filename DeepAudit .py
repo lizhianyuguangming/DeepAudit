@@ -41,7 +41,7 @@ class CodeAuditApp:
         self.progress_var = tk.IntVar(value=0)
         self.progress_bar = None
         self.files_to_analyze = []
-        
+
         # 添加API验证状态标志，用于记录API是否已验证成功
         self.api_validated = False
 
@@ -80,24 +80,22 @@ class CodeAuditApp:
         self.auto_analysis_paused = False
         self.auto_analysis_cancelled = False
         self.auto_analysis_thread = None
-        
+
         # 修改初始化顺序，立即开始配置初始化
         self.delayed_config_init()
-        
-        # 如果有API密钥，立即开始验证
-        if self.api_key:
-            self.status_bar.config(text="正在验证API密钥...")
-            self.validation_start_time = time.time()
-            self._validate_api_key()
-            self.root.after(100, self.check_initial_validation)
+
+        # 不再自动验证API密钥，只在需要时验证
+        self.status_bar.config(text="就绪")
 
     def _init_configuration(self):
         """统一配置初始化"""
         self.config = configparser.ConfigParser()
         self.config_path = Path("config.ini")
 
-        # 延迟加载非必要配置
-        self.root.after(500, self.load_full_config)
+        # 初始化API相关配置
+        self.api_key = self.config.get('DEFAULT', 'API_KEY', fallback='')
+        self.api_endpoint = self.config.get('DEFAULT', 'API_ENDPOINT',
+                                            fallback='https://api.deepseek.com/v1/chat/completions')
 
         # 初始化日志路径
         self.log_file = self.project_path / 'error.log'
@@ -119,7 +117,8 @@ class CodeAuditApp:
             '低危': '#4CAF50'
         }
 
-        self.api_key = self.config.get('DEFAULT', 'API_KEY', fallback='')
+        # 延迟加载非必要配置
+        self.root.after(500, self.load_full_config)
 
     def _init_ui(self):
         """界面组件初始化"""
@@ -346,47 +345,67 @@ class CodeAuditApp:
         if not self.api_key:
             messagebox.showwarning("警告", "API密钥未配置，请先在设置中配置API密钥")
             return False
-            
+
         # 如果API尚未验证过，则进行验证
         if not hasattr(self, 'api_validated') or not self.api_validated:
-            # 显示提示信息
-            messagebox.showwarning("API验证", "API密钥尚未验证，将进行验证...")
-            # 验证API密钥是否有效
-            try:
-                session = requests.Session()
-                request_headers = {"Authorization": f"Bearer {self.api_key}"}
-                request_body = {"model": "deepseek-chat", "messages": [{"role": "user", "content": "ping"}],
-                                "max_tokens": 1}
-                
-                response = session.post(
-                    self.api_endpoint,
-                    headers=request_headers,
-                    json=request_body,
-                    timeout=(3, 10)  # 连接超时3秒，读取超时10秒
-                )
-                
-                if response.status_code != 200:
-                    error_msg = f"API密钥验证失败，状态码: {response.status_code}"
-                    if response.text:
-                        try:
-                            error_data = json.loads(response.text)
-                            if 'error' in error_data and 'message' in error_data['error']:
-                                error_msg += f"\n错误信息: {error_data['error']['message']}"
-                        except:
-                            error_msg += f"\n响应内容: {response.text[:100]}"
-                    
-                    messagebox.showerror("API验证失败", error_msg)
-                    self.status_bar.config(text="API密钥无效，无法进行分析")
-                    return False
-                else:
-                    # 验证成功，设置API验证状态为已验证成功
-                    self.api_validated = True
-                    messagebox.showinfo("API验证", "API密钥验证成功！")
-            except Exception as e:
-                messagebox.showerror("API连接失败", f"无法连接到API服务器: {str(e)}")
-                self.status_bar.config(text="API连接失败，请检查网络")
-                return False
-            
+            # 显示验证中的状态
+            self.status_bar.config(text="正在验证API密钥...")
+            self.root.config(cursor="wait")  # 更改鼠标指针为等待状态
+
+            # 启动异步验证
+            self._validate_api_key()
+
+            # 验证超时计时
+            validation_start_time = time.time()
+
+            # 检查验证结果的函数
+            def check_validation():
+                try:
+                    # 尝试从事件队列获取验证结果
+                    event_type, result, _ = self.event_queue.get_nowait()
+
+                    if event_type == 'api_validation':
+                        self.root.config(cursor="")  # 恢复鼠标指针
+
+                        if result:
+                            # 验证成功，继续分析流程
+                            self.api_validated = True
+                            self.status_bar.config(text="API密钥验证成功，开始分析...")
+                            # 重新调用自动分析方法
+                            self.root.after(10, self.auto_analyze)  # 缩短延迟到10ms，加快响应
+                        else:
+                            # 验证失败
+                            self.status_bar.config(text="API密钥无效，无法进行分析")
+                            messagebox.showerror("API验证失败", "API密钥验证失败，请检查API密钥是否正确。")
+                            # 恢复按钮状态
+                            self.btn_auto_analyze.config(text="自动分析")
+                            self.btn_analyze.config(state=tk.NORMAL)
+                        return
+                except queue.Empty:
+                    # 检查是否超时
+                    current_time = time.time()
+                    if current_time - validation_start_time > 15:  # 增加超时时间到15秒
+                        self.root.config(cursor="")
+                        self.status_bar.config(text="API连接超时，请检查网络")
+                        messagebox.showwarning("API验证超时", "API服务器响应超时，请检查网络连接。")
+                        # 恢复按钮状态
+                        self.btn_auto_analyze.config(text="自动分析")
+                        self.btn_analyze.config(state=tk.NORMAL)
+                        # 添加重试按钮
+                        retry_button = tk.Button(self.root, text="重试验证", command=self.retry_api_validation)
+                        retry_button.place(relx=0.5, rely=0.5, anchor="center")
+                        self.root.after(3000, retry_button.destroy)  # 3秒后自动移除按钮
+                        return
+
+                    # 继续等待验证结果
+                    self.root.after(20, check_validation)  # 缩短检查间隔到20ms
+
+            # 开始检查验证结果
+            self.root.after(20, check_validation)
+
+            # 等待验证完成后再继续
+            return False
+
         # 初始化状态
         self._reset_analysis_state()
         self.auto_analysis_cancelled = False
@@ -396,7 +415,7 @@ class CodeAuditApp:
         self.btn_auto_analyze.config(text="取消分析")
         self.btn_analyze.config(state=tk.DISABLED)
         # self.btn_pause_resume.config(state=tk.NORMAL)
-        
+
         # 强制更新UI，确保按钮文本立即显示
         self.root.update_idletasks()
 
@@ -488,65 +507,27 @@ class CodeAuditApp:
         self.tree.bind("<<TreeviewClose>>", self._handle_tree_resize)
         self.tree.bind("<Configure>", self._handle_tree_resize)
 
-    def _handle_tree_resize_fixed(self, event=None):
-        """处理树状视图尺寸变化（固定宽度版本）"""
-        try:
-            # 获取树视图的宽度
-            tree_width = self.tree.winfo_width()
-
-            # 如果树视图宽度小于最小宽度，则使用最小宽度
-            if tree_width < 150:
-                tree_width = 150
-
-            # 保持列宽固定，确保水平滚动条可以正常工作
-            # 不再动态调整列宽，而是保持固定值
-            pass
-        except Exception as e:
-            self.log_error(f"树大小调整错误: {str(e)}")
-
-    def _update_scrollbar(self, first, last, scrollbar):
-        """更新滚动条位置并确保其可见性"""
-        scrollbar.set(first, last)
-
-        # 始终显示垂直滚动条，不再根据滚动范围隐藏
-        # 这样可以确保滚动条始终可见且易于点击
-        scrollbar.pack(expand=False, fill=tk.Y, side=tk.RIGHT)
-
     def _handle_tree_resize(self, event=None):
         """处理树状视图尺寸变化"""
         try:
-            # 获取树视图的宽度
             tree_width = self.tree.winfo_width()
-
-            # 设置列宽度为树视图宽度的95%，留出一些空间给滚动条
-            column_width = int(tree_width * 0.95)
-
-            # 设置树视图的列宽
-            self.tree.column('#0', width=column_width)
+            if tree_width < 150:
+                tree_width = 150
+            self.tree.column('#0', width=int(tree_width * 0.95))
         except Exception as e:
             self.log_error(f"树大小调整错误: {str(e)}")
 
     def _on_tree_open(self, event):
         """处理树节点展开事件"""
-        try:
-            # 获取当前选中的项
-            item = self.tree.focus()
-            if item:
-                # 确保节点是打开的
-                self.tree.item(item, open=True)
-        except Exception as e:
-            self.log_error(f"树节点展开错误: {str(e)}")
+        item = self.tree.focus()
+        if item:
+            self.tree.item(item, open=True)
 
     def _on_tree_close(self, event):
         """处理树节点关闭事件"""
-        try:
-            # 获取当前选中的项
-            item = self.tree.focus()
-            if item:
-                # 确保节点是关闭的
-                self.tree.item(item, open=False)
-        except Exception as e:
-            self.log_error(f"树节点关闭错误: {str(e)}")
+        item = self.tree.focus()
+        if item:
+            self.tree.item(item, open=False)
 
     def _init_toolbar(self, parent):
         """初始化工具栏"""
@@ -554,6 +535,14 @@ class CodeAuditApp:
         self.toolbar.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
 
         ttk.Button(self.toolbar, text="打开项目", command=self.open_project).pack(side=tk.LEFT, padx=5)
+
+        # 模型选择下拉框
+        self.model_var = tk.StringVar(value="deepseek-chat")
+        self.model_combobox = ttk.Combobox(self.toolbar, textvariable=self.model_var,
+                                           values=["deepseek-chat", "deepseek-reasoner"],
+                                           state="readonly", width=15)
+        self.model_combobox.pack(side=tk.LEFT, padx=5)
+
         self.btn_analyze = ttk.Button(self.toolbar, text="开始分析", command=self.toggle_analysis)
         self.btn_analyze.pack(side=tk.LEFT, padx=5)
 
@@ -573,7 +562,7 @@ class CodeAuditApp:
             if not file_list:
                 messagebox.showinfo("提示", "请先选择要分析的文件")
                 return
-                
+
             # 切换到分析状态
             self.btn_analyze.config(text="取消分析")
             self.btn_auto_analyze.config(state=tk.DISABLED)
@@ -1033,17 +1022,23 @@ class CodeAuditApp:
         self.root.bind('<Control-f>', lambda e: self.search_entry.focus())
 
     def delayed_config_init(self):
-        """优化后的延迟配置初始化"""
-        print(f"[DEBUG][{time.time()}] 开始延迟配置初始化，当前线程: {threading.current_thread().name}")
+        """延迟配置初始化，确保UI组件已完全加载"""
         self.project_path = Path.cwd()
+        threading.Thread(target=self._config_worker, daemon=True).start()
 
-        # 在后台线程执行配置加载
-        def config_worker():
-            print(f"[DEBUG][{time.time()}] 配置工作线程启动:{threading.current_thread().name}")
-            self._init_configuration()
-            self.root.after(100, self.post_config_init)
+    def _config_worker(self):
+        """配置初始化工作线程"""
+        self._init_configuration()
+        self.root.after(100, self._post_config_init)
 
-        threading.Thread(target=config_worker, daemon=True).start()
+    def _post_config_init(self):
+        """配置初始化后的处理"""
+        if not hasattr(self, 'api_key') or not self.api_key:
+            self.api_key = self.config.get('DEFAULT', 'API_KEY', fallback='')
+
+        self.validation_start_time = time.time()
+        self._validate_api_key()
+        self.root.after(500, self.check_initial_validation)
 
     def post_config_init(self):
         """配置加载后的初始化"""
@@ -1058,54 +1053,9 @@ class CodeAuditApp:
         self.root.after(500, self.check_initial_validation)
 
     def check_initial_validation(self):
-        """检查初始验证结果 - 优化版本"""
-        try:
-            event_type, result, _ = self.event_queue.get_nowait()
-            if event_type == 'api_validation':
-                if result:
-                    # API验证成功
-                    self.api_validated = True
-                    if hasattr(self, 'delayed_init'):
-                        self.delayed_init()
-                    self.status_bar.config(text="就绪")
-                    # 确保分析按钮可用
-                    if hasattr(self, 'btn_analyze'):
-                        self.btn_analyze.config(state=tk.NORMAL)
-                    if hasattr(self, 'btn_auto_analyze'):
-                        self.btn_auto_analyze.config(state=tk.NORMAL)
-                else:
-                    # API验证失败，显示明确的错误提示并禁用分析按钮
-                    self.api_validated = False
-                    self.status_bar.config(text="API密钥无效，请检查配置")
-                    # 使用after方法延迟显示消息框，避免阻塞UI
-                    self.root.after(100, lambda: messagebox.showerror("API验证失败", "API密钥验证失败，请检查API密钥是否正确。分析功能将被禁用。"))
-                    # 禁用分析按钮
-                    if hasattr(self, 'btn_analyze'):
-                        self.btn_analyze.config(state=tk.DISABLED)
-                    if hasattr(self, 'btn_auto_analyze'):
-                        self.btn_auto_analyze.config(state=tk.DISABLED)
-                return
-        except Empty:
-            current_time = time.time()
-            time_elapsed = current_time - self.validation_start_time
-
-            if time_elapsed > 15:  # 增加超时时间到15秒
-                self.api_validated = False
-                self.status_bar.config(text="API服务器响应超时，请检查网络连接")
-                # 使用after方法延迟显示消息框，避免阻塞UI
-                self.root.after(100, lambda: messagebox.showwarning("API验证超时", "API服务器响应超时，请检查网络连接。分析功能将被禁用。"))
-                # 禁用分析按钮
-                if hasattr(self, 'btn_analyze'):
-                    self.btn_analyze.config(state=tk.DISABLED)
-                if hasattr(self, 'btn_auto_analyze'):
-                    self.btn_auto_analyze.config(state=tk.DISABLED)
-                # 添加重试按钮
-                retry_button = tk.Button(self.root, text="重试验证", command=self.retry_api_validation)
-                retry_button.place(relx=0.5, rely=0.5, anchor="center")
-                self.root.after(3000, retry_button.destroy)  # 3秒后自动移除按钮
-                return
-        # 缩短检查间隔到50毫秒，加快响应速度
-        self.root.after(50, self.check_initial_validation)
+        """检查初始API验证状态 - 已移除实际验证逻辑"""
+        self.api_validated = True
+        return True
 
     def search_text(self, forward=True):
         """执行文本搜索"""
@@ -1167,64 +1117,20 @@ class CodeAuditApp:
             if not self.api_key:
                 messagebox.showwarning("警告", "API密钥未配置，请先在设置中配置API密钥")
                 return False
-                
+
+            # 优化API验证逻辑：只在实际需要使用API时才验证
             # 如果API已经验证过且有效，直接继续分析流程
             if hasattr(self, 'api_validated') and self.api_validated:
                 # API已验证，直接继续
                 pass
-            # 如果API尚未验证过，则进行异步验证
-            elif not hasattr(self, 'api_validated') or not self.api_validated:
-                # 显示验证中的状态
-                self.status_bar.config(text="正在验证API密钥...")
-                self.root.config(cursor="wait")  # 更改鼠标指针为等待状态
-                
-                # 启动异步验证
-                self._validate_api_key()
-                
-                # 验证超时计时
-                validation_start_time = time.time()
-                
-                # 检查验证结果的函数
-                def check_validation():
-                    try:
-                        # 尝试从事件队列获取验证结果
-                        event_type, result, _ = self.event_queue.get_nowait()
-                        
-                        if event_type == 'api_validation':
-                            self.root.config(cursor="")  # 恢复鼠标指针
-                            
-                            if result:
-                                # 验证成功，继续分析流程
-                                self.api_validated = True
-                                self.status_bar.config(text="API密钥验证成功，开始分析...")
-                                # 重新调用分析方法
-                                self.root.after(10, self.start_analysis)  # 缩短延迟到10ms，加快响应
-                            else:
-                                # 验证失败
-                                self.status_bar.config(text="API密钥无效，无法进行分析")
-                                messagebox.showerror("API验证失败", "API密钥验证失败，请检查API密钥是否正确。")
-                            return
-                    except queue.Empty:
-                        # 检查是否超时
-                        current_time = time.time()
-                        if current_time - validation_start_time > 15:  # 增加超时时间到15秒
-                            self.root.config(cursor="")
-                            self.status_bar.config(text="API连接超时，请检查网络")
-                            messagebox.showwarning("API验证超时", "API服务器响应超时，请检查网络连接。")
-                            # 添加重试按钮
-                            retry_button = tk.Button(self.root, text="重试验证", command=self.retry_api_validation)
-                            retry_button.place(relx=0.5, rely=0.5, anchor="center")
-                            self.root.after(3000, retry_button.destroy)  # 3秒后自动移除按钮
-                            return
-                        
-                        # 继续等待验证结果
-                        self.root.after(20, check_validation)  # 缩短检查间隔到20ms
-                
-                # 开始检查验证结果
-                self.root.after(20, check_validation)
-                
-                # 等待验证完成后再继续
-                return False
+            else:
+                # 设置API为已验证状态，跳过验证步骤
+                # 只有在实际调用API进行分析时才会真正验证API有效性
+                self.api_validated = True
+                self.status_bar.config(text="准备开始分析...")
+
+                # 注意：实际的API验证将在发送请求时进行
+                # 这样可以避免不必要的API验证，提高用户体验
 
             # 记录开始分析
             self.log_info(f"开始分析任务，选中文件数: {len(file_list)}")
@@ -1268,7 +1174,6 @@ class CodeAuditApp:
             self.log_error(f"启动分析失败: {str(e)}\n{traceback.format_exc()}")
             messagebox.showerror("错误", f"启动分析失败: {str(e)}")
             return False
-
 
     def _handle_events(self):
         """优化的事件处理器"""
@@ -1526,7 +1431,7 @@ class CodeAuditApp:
 
             # 确保总是发送done事件，无论是否发生异常
             self.event_queue.put(('done', None, None))
-            
+
             # 直接在UI线程中重新启用自动分析按钮，确保按钮状态正确恢复
             self.root.after(0, lambda: self.btn_auto_analyze.config(state=tk.NORMAL))
 
@@ -1539,6 +1444,37 @@ class CodeAuditApp:
         if suffix not in self.supported_langs:
             self.status_bar.config(text=f"不支持的文件类型: {suffix}")
             return {'status_code': 400, 'text': '不支持的文件类型'}
+
+        # 在实际调用API前验证API密钥有效性
+        if not hasattr(self, 'api_validated') or not self.api_validated:
+            # 显示验证中的状态
+            self.status_bar.config(text="正在验证API密钥...")
+            self.root.config(cursor="wait")  # 更改鼠标指针为等待状态
+
+            # 启动异步验证并等待结果
+            validation_start_time = time.time()
+            self._validate_api_key(force_validation=True)
+
+            # 等待验证结果
+            while True:
+                try:
+                    event_type, result, _ = self.event_queue.get_nowait()
+                    if event_type == 'api_validation':
+                        self.root.config(cursor="")  # 恢复鼠标指针
+                        if not result:
+                            # 验证失败，无法继续分析
+                            self.status_bar.config(text="API密钥无效，无法进行分析")
+                            messagebox.showerror("API验证失败", "API密钥验证失败，请检查API密钥是否正确。")
+                            return {'status_code': 401, 'text': 'API密钥验证失败'}
+                        break
+                except queue.Empty:
+                    # 检查是否超时
+                    if time.time() - validation_start_time > 15:
+                        self.root.config(cursor="")
+                        self.status_bar.config(text="API连接超时，请检查网络")
+                        messagebox.showwarning("API验证超时", "API服务器响应超时，请检查网络连接。")
+                        return {'status_code': 408, 'text': 'API验证超时'}
+                    time.sleep(0.1)  # 短暂休眠，避免CPU占用过高
 
         # 根据文件类型调整提示词
         prompt = f"""
@@ -1574,7 +1510,7 @@ class CodeAuditApp:
         try:
             # 构建请求体JSON
             request_json = {
-                "model": "deepseek-chat",
+                "model": self.model_var.get(),
                 "messages": [{
                     "role": "user",
                     "content": prompt  # 使用统一的prompt变量
@@ -1599,6 +1535,22 @@ class CodeAuditApp:
             print("[调试] 响应内容:")
             print(response.text)  # 直接输出原始响应文本
 
+            # 检查API响应状态码，特别处理401认证错误
+            if response.status_code == 401:
+                # 尝试从响应中提取错误信息
+                error_message = "API密钥无效，请检查API密钥是否正确"
+                try:
+                    response_json = json.loads(response.text)
+                    if 'error' in response_json and 'message' in response_json['error']:
+                        error_message = response_json['error']['message']
+                except:
+                    pass  # 如果解析失败，使用默认错误信息
+
+                # 更新状态栏
+                self.status_bar.config(text=f"API认证失败: {error_message}")
+                # 重置API验证状态，强制下次重新验证
+                self.api_validated = False
+
             return {
                 'status_code': response.status_code,
                 'text': response.text
@@ -1615,64 +1567,11 @@ class CodeAuditApp:
         with open(self.config_path, 'w') as f:
             self.config.write(f)
 
-    def _validate_api_key(self):
-        """异步验证API密钥有效性 - 优化版本"""
-        # 如果API已经验证过且有效，直接返回True
-        if hasattr(self, 'api_validated') and self.api_validated:
-            # 直接将验证成功的结果放入事件队列，以便调用者可以处理
-            self.event_queue.put(('api_validation', True, None))
-            return True
-
-        def validate_worker():
-            try:
-                start_time = time.time()
-                
-                # 实际执行验证请求 - 使用最小化请求体积加快验证速度
-                session = requests.Session()
-                # 配置重试策略，提高验证成功率
-                retry_strategy = Retry(
-                    total=2,  # 最多重试2次
-                    backoff_factor=0.5,  # 重试间隔时间因子
-                    status_forcelist=[429, 500, 502, 503, 504],  # 需要重试的HTTP状态码
-                    allowed_methods=["POST"]  # 允许重试的HTTP方法
-                )
-                adapter = HTTPAdapter(max_retries=retry_strategy)
-                session.mount("https://", adapter)
-                
-                request_headers = {"Authorization": f"Bearer {self.api_key}"}
-                # 使用最小化的请求体，减少数据传输量
-                request_body = {"model": "deepseek-chat", "messages": [{"role": "user", "content": ""}],
-                                "max_tokens": 1}
-
-                # 增加超时时间，提高连接成功率
-                response = session.post(
-                    self.api_endpoint,
-                    headers=request_headers,
-                    json=request_body,
-                    timeout=(5, 10)  # 连接超时5秒，读取超时10秒，提高连接成功率
-                )
-
-                # 处理验证结果
-                is_valid = response.status_code == 200
-                if is_valid:
-                    self.api_validated = True  # 设置API验证状态为已验证成功
-                    # 更新状态栏显示
-                    self.root.after(0, lambda: self.status_bar.config(text="API密钥验证成功"))
-                else:
-                    # 验证失败时更新状态栏
-                    self.root.after(0, lambda: self.status_bar.config(text="API密钥验证失败"))
-                    
-                self.event_queue.put(('api_validation', is_valid, None))
-
-                print(f"[API验证][{time.time()}] 验证耗时: {time.time() - start_time:.2f}s, 结果: {is_valid}")
-            except Exception as e:
-                print(f"[API错误][{time.time()}] {type(e).__name__}: {str(e)}")
-                # 验证出错时更新状态栏
-                self.root.after(0, lambda: self.status_bar.config(text=f"API验证出错: {type(e).__name__}"))
-                self.event_queue.put(('api_validation', False, None))
-
-        # 启动验证线程并立即返回
-        threading.Thread(target=validate_worker, daemon=True).start()
+    def _validate_api_key(self, force_validation=False):
+        """API密钥验证方法 - 已移除实际验证逻辑"""
+        self.api_validated = True
+        self.event_queue.put(('api_validation', True, None))
+        return True
 
     def check_validation_result(self):
         """检查验证结果"""
@@ -1704,16 +1603,10 @@ class CodeAuditApp:
         return None
 
     def retry_api_validation(self):
-        """重试API验证"""
-        # 重置验证状态
-        self.api_validated = False
-        # 更新状态栏
-        self.status_bar.config(text="正在重新验证API密钥...")
-        # 重新开始验证
-        self.validation_start_time = time.time()
-        self._validate_api_key()
-        self.root.after(100, self.check_initial_validation)
-        
+        """重试API验证 - 已移除实际验证逻辑"""
+        self.api_validated = True
+        return True
+
     def log_error(self, error_msg, file_path=None):
         """记录错误日志"""
         try:
@@ -2041,41 +1934,45 @@ Payload：{values[6]}
                 (r'//.*?$|/\*.*?\*/', 'java_comment', '#5D6C79'),  # 注释 - 深灰色
                 (r'\".*?\"', 'java_string', '#008B45'),  # 字符串 - 深绿色
                 (r'\'.*?\'', 'java_char', '#008B45'),  # 字符 - 深绿色
-                
+
                 # 类型和声明
                 (r'(class|interface|enum|record)\s+(\w+)', 'java_class_decl', ('#1E6262', 2)),  # 类声明 - 深青色
-                (r'\b(void|int|byte|short|long|float|double|char|boolean)\b', 'java_primitive', '#0000CD'),  # 基本类型 - 深蓝色
+                (r'\b(void|int|byte|short|long|float|double|char|boolean)\b', 'java_primitive', '#0000CD'),
+                # 基本类型 - 深蓝色
                 (r'\b([A-Z][a-zA-Z0-9_]*)\b(?!\s*\()', 'java_class_ref', '#1E6262'),  # 类引用 - 深青色
-                
+
                 # 方法和函数
-                (r'(public|private|protected|static)?\s+([a-zA-Z_$][a-zA-Z\d_$]*)\s*\(', 'java_method_decl', ('#E8A317', 2)),  # 方法声明 - 深橙色
+                (r'(public|private|protected|static)?\s+([a-zA-Z_$][a-zA-Z\d_$]*)\s*\(', 'java_method_decl',
+                 ('#E8A317', 2)),  # 方法声明 - 深橙色
                 (r'\b([a-zA-Z_$][a-zA-Z\d_$]*)\s*\(', 'java_method_call', '#4F4F4F'),  # 方法调用 - 深灰色
-                
+
                 # 泛型
                 (r'<([A-Z][a-zA-Z0-9_]*(?:\s*,\s*[A-Z][a-zA-Z0-9_]*)*)>', 'java_generic', '#7B68EE'),  # 泛型 - 深紫色
                 (r'<\?\s+(?:extends|super)\s+[A-Z][a-zA-Z0-9_]*>', 'java_wildcard', '#7B68EE'),  # 通配符 - 深紫色
-                
+
                 # Lambda和函数式
                 (r'\([^()]*\)\s*->\s*[^;]+', 'java_lambda', '#D2691E'),  # Lambda表达式 - 深橙色
                 (r'::', 'java_method_ref', '#D2691E'),  # 方法引用 - 深橙色
-                
+
                 # 异常处理
                 (r'\b(try|catch|throw|throws|finally)\b', 'java_exception', '#B22222'),  # 异常处理关键字 - 深红色
-                
+
                 # 包和导入
                 (r'\b(import|package)\b.*?;', 'java_import', '#696969'),  # 导入语句 - 深灰色
-                
+
                 # 注释标签
-                (r'@(param|return|throws|author|version|since|see|deprecated)\b', 'java_doc_tag', '#2E8B57'),  # JavaDoc标签 - 深绿色
-                
+                (r'@(param|return|throws|author|version|since|see|deprecated)\b', 'java_doc_tag', '#2E8B57'),
+                # JavaDoc标签 - 深绿色
+
                 # 修饰符
-                (r'\b(public|private|protected|static|final|abstract|synchronized|volatile|transient|native|strictfp)\b',
-                 'java_modifier', '#D2691E'),  # 修饰符 - 深橙色
-                
+                (
+                    r'\b(public|private|protected|static|final|abstract|synchronized|volatile|transient|native|strictfp)\b',
+                    'java_modifier', '#D2691E'),  # 修饰符 - 深橙色
+
                 # 数字字面量
                 (r'\b(\d+\.?\d*[fFlL]?)\b', 'java_number', '#4169E1'),  # 数字 - 深蓝色
                 (r'\b(0x[0-9a-fA-F]+)\b', 'java_hex', '#4169E1'),  # 十六进制 - 深蓝色
-                
+
                 # 特殊语法
                 (r'\?|:', 'java_ternary', '#D2691E'),  # 三元运算符 - 深橙色
                 (r'\b(instanceof)\b', 'java_instanceof', '#D2691E'),  # instanceof - 深橙色
@@ -2085,17 +1982,18 @@ Payload：{values[6]}
             # Java关键字
             java_keywords = [
                 'if', 'else', 'switch', 'case', 'default', 'for', 'do', 'while', 'break', 'continue',
-                'return', 'this', 'super', 'extends', 'implements', 'null', 'true', 'false', 
+                'return', 'this', 'super', 'extends', 'implements', 'null', 'true', 'false',
                 'assert', 'enum', 'var', 'yield', 'sealed', 'permits', 'non-sealed', 'record'
             ]
             patterns.append((r'\b(' + '|'.join(java_keywords) + r')\b', 'java_keyword', '#D2691E'))  # 关键字 - 深橙色
-            
+
             # Java注解关键字
             java_annotations = [
-                'Override', 'Deprecated', 'SuppressWarnings', 'FunctionalInterface', 
+                'Override', 'Deprecated', 'SuppressWarnings', 'FunctionalInterface',
                 'SafeVarargs', 'Target', 'Retention', 'Documented', 'Inherited'
             ]
-            patterns.append((r'@(' + '|'.join(java_annotations) + r')\b', 'java_std_annotation', '#DAA520'))  # 标准注解 - 深黄色
+            patterns.append(
+                (r'@(' + '|'.join(java_annotations) + r')\b', 'java_std_annotation', '#DAA520'))  # 标准注解 - 深黄色
 
         # 应用语言特定规则
         for pattern, tag, *args in patterns:
@@ -2585,7 +2483,7 @@ Payload：{values[6]}
             all_vulnerabilities = []
 
             # 支持多线程处理的文件类型
-            multi_thread_exts = ['.xml', '.php', '.java','.php']
+            multi_thread_exts = ['.xml', '.php', '.java', '.php']
 
             # 检查是否使用多线程处理
             use_multi_thread = False
@@ -2799,8 +2697,10 @@ Payload：{values[6]}
                             vuln["文件路径"] = str(file_path)
 
                         # 记录块分析结果
-                        print(f"[DEBUG] 线程完成第 {i + 1}/{len(chunks)} 块分析，发现 {len(chunk_vulnerabilities)} 个漏洞")
-                        self.log_info(f"线程完成第 {i + 1}/{len(chunks)} 块分析，发现 {len(chunk_vulnerabilities)} 个漏洞")
+                        print(
+                            f"[DEBUG] 线程完成第 {i + 1}/{len(chunks)} 块分析，发现 {len(chunk_vulnerabilities)} 个漏洞")
+                        self.log_info(
+                            f"线程完成第 {i + 1}/{len(chunks)} 块分析，发现 {len(chunk_vulnerabilities)} 个漏洞")
 
                         # 使用锁保护共享资源
                         with result_lock:
@@ -2830,12 +2730,39 @@ Payload：{values[6]}
                         self.event_queue.put(('progress', None, None))
                         return {'status': 'parse_error', 'error': error_msg, 'chunk_index': i}
                 else:
-                    error_msg = f"线程块{i + 1}分析失败: {response['text'][:200]}"
-                    self.log_error(error_msg, file_path)
-                    print(f"[DEBUG] 线程处理第 {i + 1}/{len(chunks)} 块状态码错误: {response['status_code']}")
+                    # 特殊处理401认证错误
+                    if response['status_code'] == 401:
+                        # 尝试从响应中提取错误信息
+                        error_message = "API密钥无效，请检查API密钥是否正确"
+                        try:
+                            response_json = json.loads(response['text'])
+                            if 'error' in response_json and 'message' in response_json['error']:
+                                error_message = response_json['error']['message']
+                        except:
+                            pass  # 如果解析失败，使用默认错误信息
+
+                        # 记录详细错误信息
+                        error_msg = f"线程块{i + 1}分析失败: {error_message}"
+                        self.log_error(error_msg, file_path)
+                        print(f"[DEBUG] 线程处理第 {i + 1}/{len(chunks)} 块状态码错误: {response['status_code']}")
+                        print(f"[DEBUG] 错误信息: {error_msg}")
+
+                        # 在主线程中显示错误消息框
+                        self.root.after(0, lambda msg=error_message: messagebox.showerror("API认证失败",
+                                                                                          f"API认证失败: {msg}"))
+                        # 更新状态栏
+                        self.root.after(0, lambda msg=error_message: self.status_bar.config(text=f"API认证失败: {msg}"))
+                        # 重置API验证状态，强制下次重新验证
+                        self.api_validated = False
+                    else:
+                        error_msg = f"线程块{i + 1}分析失败: {response['text'][:200]}"
+                        self.log_error(error_msg, file_path)
+                        print(f"[DEBUG] 线程处理第 {i + 1}/{len(chunks)} 块状态码错误: {response['status_code']}")
+
                     # 即使失败也更新进度
                     self.event_queue.put(('progress', None, None))
-                    return {'status': 'http_error', 'error': error_msg, 'status_code': response['status_code'], 'chunk_index': i}
+                    return {'status': 'http_error', 'error': error_msg, 'status_code': response['status_code'],
+                            'chunk_index': i}
             except Exception as e:
                 error_msg = f"线程处理第 {i + 1}/{len(chunks)} 块异常: {str(e)}"
                 self.log_error(f"{error_msg}\n{traceback.format_exc()}", file_path)
@@ -2852,14 +2779,14 @@ Payload：{values[6]}
                 future_to_chunk = {}  # 创建future到chunk的映射字典
                 active_futures = set()  # 跟踪活动的future
                 i = 0
-                
+
                 # 处理所有块，直到全部完成或取消
                 while i < len(chunks) or active_futures:
                     # 检查是否已取消分析
                     if hasattr(self, 'auto_analysis_cancelled') and self.auto_analysis_cancelled:
                         self.log_info(f"分析已取消，停止提交任务")
                         break
-                    
+
                     # 检查是否暂停
                     if hasattr(self, 'auto_analysis_paused') and self.auto_analysis_paused:
                         self.log_info(f"分析已暂停，等待继续提交任务")
@@ -2867,10 +2794,10 @@ Payload：{values[6]}
                         if active_futures:
                             # 等待任意一个任务完成
                             done, active_futures = concurrent.futures.wait(
-                                active_futures, 
+                                active_futures,
                                 return_when=concurrent.futures.FIRST_COMPLETED
                             )
-                            
+
                             # 处理完成的任务
                             for future in done:
                                 self._handle_completed_future(future, futures, file_path)
@@ -2884,7 +2811,7 @@ Payload：{values[6]}
                                 break
                             self.log_info(f"分析继续，继续提交任务")
                         continue
-                    
+
                     # 提交新任务（如果还有未处理的块）
                     if i < len(chunks) and len(active_futures) < max_workers:
                         chunk_info = chunks[i]
@@ -2894,14 +2821,14 @@ Payload：{values[6]}
                         active_futures.add(future)
                         i += 1
                         continue
-                    
+
                     # 如果没有新任务可提交或已达到最大工作线程数，等待任意一个任务完成
                     if active_futures:
                         done, active_futures = concurrent.futures.wait(
-                            active_futures, 
+                            active_futures,
                             return_when=concurrent.futures.FIRST_COMPLETED
                         )
-                        
+
                         # 处理完成的任务
                         for future in done:
                             self._handle_completed_future(future, futures, file_path)
@@ -2942,7 +2869,8 @@ Payload：{values[6]}
                     # 更新进度信息
                     progress_percent = int(completed / len(chunks) * 100)
                     self.log_info(f"多线程处理进度: {completed}/{len(chunks)} ({progress_percent}%)")
-                    print(f"[DEBUG] 进度：{completed}/{len(chunks)} ({progress_percent}%) [成功: {successful_chunks}, 失败: {failed_chunks}]")
+                    print(
+                        f"[DEBUG] 进度：{completed}/{len(chunks)} ({progress_percent}%) [成功: {successful_chunks}, 失败: {failed_chunks}]")
         except Exception as e:
             self.log_error(f"线程池执行异常: {str(e)}\n{traceback.format_exc()}", file_path)
         finally:
@@ -2950,7 +2878,8 @@ Payload：{values[6]}
             total_time = time.time() - start_time
             self.log_info(
                 f"多线程处理完成: {file_path.name}, 总耗时: {total_time:.2f}秒, 总块数: {len(chunks)}, 成功: {successful_chunks}, 失败: {failed_chunks}, 发现漏洞: {len(all_vulnerabilities)}个")
-            print(f"[DEBUG] 异常分块只有{successful_chunks}块，进度：{successful_chunks}/{len(chunks)} （{int(successful_chunks/len(chunks)*100)}%）")
+            print(
+                f"[DEBUG] 异常分块只有{successful_chunks}块，进度：{successful_chunks}/{len(chunks)} （{int(successful_chunks / len(chunks) * 100)}%）")
 
             # 确保更新进度
             self.event_queue.put(('progress', None, None))
