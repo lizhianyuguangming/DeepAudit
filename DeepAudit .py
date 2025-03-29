@@ -337,10 +337,13 @@ class CodeAuditApp:
         self.auto_analysis_cancelled = False
         self.auto_analysis_paused = False
 
-        # 更新按钮状态
+        # 更新按钮状态并立即刷新UI
         self.btn_auto_analyze.config(text="取消分析")
         self.btn_analyze.config(state=tk.DISABLED)
         # self.btn_pause_resume.config(state=tk.NORMAL)
+        
+        # 强制更新UI，确保按钮文本立即显示
+        self.root.update_idletasks()
 
         # 获取项目中所有文件
         all_files = []
@@ -509,13 +512,26 @@ class CodeAuditApp:
     def toggle_analysis(self):
         """切换开始/取消分析状态"""
         if self.btn_analyze.cget("text") == "开始分析":
+            # 获取选中的文件列表，检查是否有选中文件
+            file_list = self._get_selected_files()
+            if not file_list:
+                messagebox.showinfo("提示", "请先选择要分析的文件")
+                return
+                
             # 切换到分析状态
             self.btn_analyze.config(text="取消分析")
             self.btn_auto_analyze.config(state=tk.DISABLED)
-            self.start_analysis()
+            # 调用start_analysis并检查其返回值
+            result = self.start_analysis()
+            # 如果start_analysis返回False（例如API密钥未配置），恢复按钮状态
+            if result is False:
+                self.btn_analyze.config(text="开始分析")
+                self.btn_auto_analyze.config(state=tk.NORMAL)
         else:
             # 取消分析
             self.cancel_analysis()
+            # 确保自动分析按钮被重新启用
+            self.btn_auto_analyze.config(state=tk.NORMAL)
 
     def toggle_auto_analysis(self):
         """切换自动分析/取消状态"""
@@ -879,8 +895,8 @@ class CodeAuditApp:
             # 从当前位置之后开始搜索
             start_pos = self.code_text.index(tk.INSERT)
         elif direction == "prev":
-            # 从当前位置之前开始搜索
-            start_pos = self.code_text.index(tk.INSERT + " -1c")
+            # 从当前位置之前开始搜索 - 修复上一个按钮功能
+            start_pos = self.code_text.index(tk.INSERT)
         else:
             # 新搜索，从文本开头开始
             start_pos = '1.0'
@@ -910,8 +926,13 @@ class CodeAuditApp:
             # 确保匹配文本可见
             self.code_text.see(pos)
 
-            # 将插入点移动到匹配文本之后
-            self.code_text.mark_set(tk.INSERT, end_pos)
+            # 将插入点移动到匹配文本之前或之后，取决于搜索方向
+            if direction == "prev":
+                # 向上搜索时，将插入点移动到匹配文本之前
+                self.code_text.mark_set(tk.INSERT, pos)
+            else:
+                # 向下搜索时，将插入点移动到匹配文本之后
+                self.code_text.mark_set(tk.INSERT, end_pos)
 
             # 更新状态栏
             line = pos.split('.')[0]
@@ -1046,7 +1067,7 @@ class CodeAuditApp:
             if hasattr(self,
                        'auto_analysis_thread') and self.auto_analysis_thread and self.auto_analysis_thread.is_alive():
                 messagebox.showinfo("提示", "已有分析任务正在运行，请等待完成或取消当前任务")
-                return
+                return False
 
             # 获取选中的文件列表
             file_list = self._get_selected_files()
@@ -1054,12 +1075,12 @@ class CodeAuditApp:
             # 检查是否有选中文件
             if not file_list:
                 messagebox.showinfo("提示", "请先选择要分析的文件")
-                return
+                return False
 
             # 检查API密钥是否已配置
             if not self.api_key:
                 messagebox.showwarning("警告", "API密钥未配置，请先在设置中配置API密钥")
-                return
+                return False
 
             # 记录开始分析
             self.log_info(f"开始分析任务，选中文件数: {len(file_list)}")
@@ -1304,7 +1325,7 @@ class CodeAuditApp:
                         code = f.read()
 
                     # 估计分块数量
-                    if len(code.splitlines()) > 400:
+                    if len(code.splitlines()) > 1:
                         # 使用智能分块估计数量
                         chunks = self._smart_code_chunking(code, file_path.suffix)
                         chunk_count = len(chunks)
@@ -1359,6 +1380,9 @@ class CodeAuditApp:
 
             # 确保总是发送done事件，无论是否发生异常
             self.event_queue.put(('done', None, None))
+            
+            # 直接在UI线程中重新启用自动分析按钮，确保按钮状态正确恢复
+            self.root.after(0, lambda: self.btn_auto_analyze.config(state=tk.NORMAL))
 
     def call_deepseek_api(self, code, suffix, file_path):
         """调用DeepSeek API"""
@@ -1372,7 +1396,7 @@ class CodeAuditApp:
 
         # 根据文件类型调整提示词
         prompt = f"""
-        你是一个代码审计专家结合整段代码分析传参处理有没有可控点，使用污点分析+AST分析对代码的语义信息进行安全分析，代码没有漏洞或者不确定没有把握是否存在漏洞的就在漏洞类型处写无，严格按照以下JSON格式返回结果：
+        你是一个代码审计专家结合整段代码分析传参处理有没有可控点或者组件版本是否有漏洞，使用污点分析+AST分析对代码的语义信息进行安全分析，代码没有漏洞就在漏洞类型处写无，严格按照以下JSON格式返回结果：
         {{
             "文件路径": "{str(file_path)}",
             "行号": [行号1, 行号2, ...],
@@ -1537,7 +1561,7 @@ class CodeAuditApp:
 
         # 格式化修复建议（新增格式处理）
         repair_advice = values[7].replace('；', '\n')  # 中文分号转行
-        repair_advice = re.sub(r'(\d+\.\s*)', r'\1', repair_advice)  # 保持编号格式
+        repair_advice = re.sub(r'\d+\.\s*', '', repair_advice)  # 移除已有编号
 
         details = f"""文件路径：{values[3]}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1564,7 +1588,7 @@ Payload：{values[6]}
         for i, line in enumerate(repair_advice.split('\n'), 1):
             if line.strip():
                 self.detail_text.insert(tk.END, f"{i}. ", 'repair_title')
-                self.detail_text.insert(tk.END, f"{line}\n", 'repair_content')
+                self.detail_text.insert(tk.END, f"{line.strip()}\n", 'repair_content')
 
         self.detail_text.config(state='disabled')
 
@@ -1733,20 +1757,23 @@ Payload：{values[6]}
 
     def _highlight_code(self, code, file_ext):
         """执行语法高亮"""
-        # 公共语法元素（优化正则表达式）
+        # 公共语法元素（优化正则表达式和颜色配置）
         number_pattern = r'\b\d+\.?\d*\b'
         operator_pattern = r'(\+|\-|\*|\/|\%|\=|\&|\||\<|\>|!|\^|~|\?|:)'
         bracket_pattern = r'[{}()\[\]]'
         common_patterns = [
-            (number_pattern, 'number'),
-            (operator_pattern, 'operator'),
-            (bracket_pattern, 'bracket')
+            (number_pattern, 'number', '#6897BB'),  # 数字 - 蓝紫色
+            (operator_pattern, 'operator', '#A9B7C6'),  # 运算符 - 浅灰色
+            (bracket_pattern, 'bracket', '#A9B7C6')  # 括号 - 浅灰色
         ]
         # 初始化patterns并添加返回条件
         patterns = []
 
         # 高亮公共元素
-        for pattern, tag in common_patterns:
+        for pattern, tag, *args in common_patterns:
+            color = args[0] if args else None
+            if color:
+                self.code_text.tag_configure(tag, foreground=color)
             for match in self._find_matches(pattern, code):
                 self.code_text.tag_add(tag, match[0], match[1])
 
@@ -1828,30 +1855,70 @@ Payload：{values[6]}
             ]
             patterns.append((r'\b(' + '|'.join(php_builtin_functions) + r')\b(?=\s*\()', 'php_function', '#006699'))
 
-        # Java特定规则（新增注解高亮）
+        # Java特定规则（增强高亮显示 - 使用更深的颜色）
         elif file_ext == '.java':
             patterns = [
-                (r'@[a-zA-Z_$][a-zA-Z\d_$]*', 'java_annotation', '#808000'),  # 注解
-                (r'\b([A-Z_][A-Z0-9_]+)\b', 'java_constant', '#660E7A'),  # 常量
-                (r'(public|private|protected)\s+([a-zA-Z_$][a-zA-Z\d_$]*)\s*\(', 'function', ('#006699', 2)),  # 方法声明
-                (r'(class|interface|enum)\s+(\w+)', 'classname', ('#007F7F', 2)),  # 类名
-                (r'//.*?$|/\*.*?\*/', 'comment', '#999999'),  # 注释
-                (r'\".*?\"', 'string', '#008000'),  # 字符串
-                (r'\b(try|catch|throw|throws|finally)\b', 'java_exception', '#CC0000'),  # 异常处理关键字
-                (r'\b(import|package)\b.*?;', 'java_import', '#008080'),  # 导入语句
-                (r'\b(int|byte|short|long|float|double|char|boolean|void)\b', 'java_primitive', '#0000FF'),  # 基本类型
-                (
-                    r'\b(public|private|protected|static|final|abstract|synchronized|volatile|transient|native|strictfp)\b',
-                    'java_modifier', '#7F0055'),  # 修饰符
+                # 基础元素
+                (r'@[a-zA-Z_$][a-zA-Z\d_$]*', 'java_annotation', '#FF8C00'),  # 注解 - 深橙色
+                (r'\b([A-Z_][A-Z0-9_]+)\b', 'java_constant', '#9370DB'),  # 常量 - 深紫色
+                (r'//.*?$|/\*.*?\*/', 'java_comment', '#5D6C79'),  # 注释 - 深灰色
+                (r'\".*?\"', 'java_string', '#008B45'),  # 字符串 - 深绿色
+                (r'\'.*?\'', 'java_char', '#008B45'),  # 字符 - 深绿色
+                
+                # 类型和声明
+                (r'(class|interface|enum|record)\s+(\w+)', 'java_class_decl', ('#1E6262', 2)),  # 类声明 - 深青色
+                (r'\b(void|int|byte|short|long|float|double|char|boolean)\b', 'java_primitive', '#0000CD'),  # 基本类型 - 深蓝色
+                (r'\b([A-Z][a-zA-Z0-9_]*)\b(?!\s*\()', 'java_class_ref', '#1E6262'),  # 类引用 - 深青色
+                
+                # 方法和函数
+                (r'(public|private|protected|static)?\s+([a-zA-Z_$][a-zA-Z\d_$]*)\s*\(', 'java_method_decl', ('#E8A317', 2)),  # 方法声明 - 深橙色
+                (r'\b([a-zA-Z_$][a-zA-Z\d_$]*)\s*\(', 'java_method_call', '#4F4F4F'),  # 方法调用 - 深灰色
+                
+                # 泛型
+                (r'<([A-Z][a-zA-Z0-9_]*(?:\s*,\s*[A-Z][a-zA-Z0-9_]*)*)>', 'java_generic', '#7B68EE'),  # 泛型 - 深紫色
+                (r'<\?\s+(?:extends|super)\s+[A-Z][a-zA-Z0-9_]*>', 'java_wildcard', '#7B68EE'),  # 通配符 - 深紫色
+                
+                # Lambda和函数式
+                (r'\([^()]*\)\s*->\s*[^;]+', 'java_lambda', '#D2691E'),  # Lambda表达式 - 深橙色
+                (r'::', 'java_method_ref', '#D2691E'),  # 方法引用 - 深橙色
+                
+                # 异常处理
+                (r'\b(try|catch|throw|throws|finally)\b', 'java_exception', '#B22222'),  # 异常处理关键字 - 深红色
+                
+                # 包和导入
+                (r'\b(import|package)\b.*?;', 'java_import', '#696969'),  # 导入语句 - 深灰色
+                
+                # 注释标签
+                (r'@(param|return|throws|author|version|since|see|deprecated)\b', 'java_doc_tag', '#2E8B57'),  # JavaDoc标签 - 深绿色
+                
+                # 修饰符
+                (r'\b(public|private|protected|static|final|abstract|synchronized|volatile|transient|native|strictfp)\b',
+                 'java_modifier', '#D2691E'),  # 修饰符 - 深橙色
+                
+                # 数字字面量
+                (r'\b(\d+\.?\d*[fFlL]?)\b', 'java_number', '#4169E1'),  # 数字 - 深蓝色
+                (r'\b(0x[0-9a-fA-F]+)\b', 'java_hex', '#4169E1'),  # 十六进制 - 深蓝色
+                
+                # 特殊语法
+                (r'\?|:', 'java_ternary', '#D2691E'),  # 三元运算符 - 深橙色
+                (r'\b(instanceof)\b', 'java_instanceof', '#D2691E'),  # instanceof - 深橙色
+                (r'\b(new)\b', 'java_new', '#D2691E'),  # new关键字 - 深橙色
             ]
 
-            # 新增Java关键字
+            # Java关键字
             java_keywords = [
                 'if', 'else', 'switch', 'case', 'default', 'for', 'do', 'while', 'break', 'continue',
-                'return', 'new', 'instanceof', 'this', 'super', 'extends', 'implements', 'null',
-                'true', 'false', 'assert', 'enum', 'var'
+                'return', 'this', 'super', 'extends', 'implements', 'null', 'true', 'false', 
+                'assert', 'enum', 'var', 'yield', 'sealed', 'permits', 'non-sealed', 'record'
             ]
-            patterns.append((r'\b(' + '|'.join(java_keywords) + r')\b', 'java_keyword', '#0033CC'))
+            patterns.append((r'\b(' + '|'.join(java_keywords) + r')\b', 'java_keyword', '#D2691E'))  # 关键字 - 深橙色
+            
+            # Java注解关键字
+            java_annotations = [
+                'Override', 'Deprecated', 'SuppressWarnings', 'FunctionalInterface', 
+                'SafeVarargs', 'Target', 'Retention', 'Documented', 'Inherited'
+            ]
+            patterns.append((r'@(' + '|'.join(java_annotations) + r')\b', 'java_std_annotation', '#DAA520'))  # 标准注解 - 深黄色
 
         # 应用语言特定规则
         for pattern, tag, *args in patterns:
@@ -2319,6 +2386,10 @@ Payload：{values[6]}
                 current_max = int(self.progress['maximum'])
                 # 计算新的最大值：当前最大值减1（当前文件的默认块数）加上实际分块数
                 new_max = current_max - 1 + total_chunks
+                # 确保最大值不会超过实际分块总数
+                if new_max > total_chunks * 2:  # 添加安全检查，防止最大值异常增长
+                    print(f"[DEBUG] 检测到异常最大值: {new_max}，重置为实际分块数: {total_chunks}")
+                    new_max = total_chunks
                 # 使用after方法在主线程中更新进度条最大值
                 self.root.after(0, lambda: self.progress.configure(maximum=new_max))
                 print(
@@ -2444,12 +2515,19 @@ Payload：{values[6]}
                     # 获取结果
                     result = future.result()
                     if result:
-                        print(f"[DEBUG] 线程处理完成第 {i + 1} 块")
+                        if isinstance(result, dict) and 'status' in result:
+                            if result['status'] == 'success':
+                                print(f"[DEBUG] 线程处理完成第 {i + 1}/{len(futures)} 块")
+                            else:
+                                print(f"[DEBUG] 线程处理第 {i + 1}/{len(futures)} 块失败: {result['status']}")
+                                print(f"[DEBUG] 错误信息: {result.get('error', '未知错误')}")
+                        else:
+                            print(f"[DEBUG] 线程处理完成第 {i + 1}/{len(futures)} 块")
                     else:
-                        print(f"[DEBUG] 线程处理第 {i + 1} 块失败或无结果")
+                        print(f"[DEBUG] 线程处理第 {i + 1}/{len(futures)} 块失败或无结果")
                 except Exception as e:
-                    print(f"[ERROR] 线程处理第 {i + 1} 块异常: {str(e)}")
-                    self.log_error(f"线程处理第 {i + 1} 块异常: {str(e)}", file_path)
+                    print(f"[ERROR] 线程处理第 {i + 1}/{len(futures)} 块异常: {str(e)}")
+                    self.log_error(f"线程处理第 {i + 1}/{len(futures)} 块异常: {str(e)}", file_path)
                 break
 
     def _process_chunks_with_threads(self, file_path, chunks, file_ext, all_vulnerabilities):
@@ -2472,6 +2550,11 @@ Payload：{values[6]}
 
         print(f"[DEBUG] 启动多线程处理，最大线程数: {max_workers}")
         self.log_info(f"启动多线程处理，最大线程数: {max_workers}")
+
+        # 创建进度跟踪变量
+        processed_chunks = 0
+        successful_chunks = 0
+        failed_chunks = 0
 
         # 定义处理单个块的函数
         def process_chunk(chunk_info):
@@ -2511,10 +2594,12 @@ Payload：{values[6]}
                 try:
                     response = self.call_deepseek_api(chunk_with_context, file_ext, file_path)
                 except Exception as e:
-                    self.log_error(f"API调用失败，块 {i + 1}/{len(chunks)}: {str(e)}\n{traceback.format_exc()}",
-                                   file_path)
+                    error_msg = f"API调用失败，块 {i + 1}/{len(chunks)}: {str(e)}"
+                    self.log_error(f"{error_msg}\n{traceback.format_exc()}", file_path)
+                    print(f"[DEBUG] 线程处理第 {i + 1}/{len(chunks)} 块API调用失败: {str(e)}")
+                    # 即使失败也更新进度
                     self.event_queue.put(('progress', None, None))
-                    return None
+                    return {'status': 'api_error', 'error': error_msg, 'chunk_index': i}
 
                 # 再次检查是否已取消分析
                 if hasattr(self, 'auto_analysis_cancelled') and self.auto_analysis_cancelled:
@@ -2537,8 +2622,8 @@ Payload：{values[6]}
                             vuln["文件路径"] = str(file_path)
 
                         # 记录块分析结果
-                        print(f"[DEBUG] 线程完成第 {i + 1} 块分析，发现 {len(chunk_vulnerabilities)} 个漏洞")
-                        self.log_info(f"线程完成第 {i + 1} 块分析，发现 {len(chunk_vulnerabilities)} 个漏洞")
+                        print(f"[DEBUG] 线程完成第 {i + 1}/{len(chunks)} 块分析，发现 {len(chunk_vulnerabilities)} 个漏洞")
+                        self.log_info(f"线程完成第 {i + 1}/{len(chunks)} 块分析，发现 {len(chunk_vulnerabilities)} 个漏洞")
 
                         # 使用锁保护共享资源
                         with result_lock:
@@ -2559,23 +2644,28 @@ Payload：{values[6]}
                         chunk_time = time.time() - chunk_start_time
                         print(f"[DEBUG] 线程处理完成第 {i + 1}/{len(chunks)} 块，耗时: {chunk_time:.2f}秒")
 
-                        return chunk_vulnerabilities
+                        return {'status': 'success', 'vulnerabilities': chunk_vulnerabilities, 'chunk_index': i}
                     except Exception as e:
-                        self.log_error(f"解析响应失败，块 {i + 1}/{len(chunks)}: {str(e)}\n{traceback.format_exc()}",
-                                       file_path)
+                        error_msg = f"解析响应失败，块 {i + 1}/{len(chunks)}: {str(e)}"
+                        self.log_error(f"{error_msg}\n{traceback.format_exc()}", file_path)
+                        print(f"[DEBUG] 线程处理第 {i + 1}/{len(chunks)} 块解析失败: {str(e)}")
+                        # 即使失败也更新进度
                         self.event_queue.put(('progress', None, None))
-                        return None
+                        return {'status': 'parse_error', 'error': error_msg, 'chunk_index': i}
                 else:
-                    self.log_error(f"线程块{i + 1}分析失败: {response['text'][:200]}", file_path)
+                    error_msg = f"线程块{i + 1}分析失败: {response['text'][:200]}"
+                    self.log_error(error_msg, file_path)
+                    print(f"[DEBUG] 线程处理第 {i + 1}/{len(chunks)} 块状态码错误: {response['status_code']}")
                     # 即使失败也更新进度
                     self.event_queue.put(('progress', None, None))
-                    return None
+                    return {'status': 'http_error', 'error': error_msg, 'status_code': response['status_code'], 'chunk_index': i}
             except Exception as e:
-                self.log_error(f"线程处理第 {i + 1}/{len(chunks)} 块异常: {str(e)}\n{traceback.format_exc()}",
-                               file_path)
+                error_msg = f"线程处理第 {i + 1}/{len(chunks)} 块异常: {str(e)}"
+                self.log_error(f"{error_msg}\n{traceback.format_exc()}", file_path)
+                print(f"[ERROR] 线程处理第 {i + 1}/{len(chunks)} 块异常: {str(e)}")
                 # 确保异常情况下也更新进度
                 self.event_queue.put(('progress', None, None))
-                return None
+                return {'status': 'exception', 'error': error_msg, 'chunk_index': i}
 
         try:
             # 创建线程池
@@ -2651,28 +2741,39 @@ Payload：{values[6]}
                 for future, (i, chunk_info) in futures:
                     chunk, line_start, line_end, chunk_type = chunk_info
                     completed += 1
+                    processed_chunks += 1
 
                     try:
                         # 获取结果
                         result = future.result()
                         if result:
-                            print(f"[DEBUG] 线程处理完成第 {i + 1}/{len(chunks)} 块")
+                            if result['status'] == 'success':
+                                successful_chunks += 1
+                                print(f"[DEBUG] 线程处理完成第 {i + 1}/{len(chunks)} 块")
+                            else:
+                                failed_chunks += 1
+                                print(f"[DEBUG] 线程处理第 {i + 1}/{len(chunks)} 块失败: {result['status']}")
+                                print(f"[DEBUG] 错误信息: {result.get('error', '未知错误')}")
                         else:
+                            failed_chunks += 1
                             print(f"[DEBUG] 线程处理第 {i + 1}/{len(chunks)} 块失败或无结果")
                     except Exception as e:
+                        failed_chunks += 1
                         print(f"[ERROR] 线程处理第 {i + 1}/{len(chunks)} 块异常: {str(e)}")
                         self.log_error(f"线程处理第 {i + 1}/{len(chunks)} 块异常: {str(e)}", file_path)
 
                     # 更新进度信息
                     progress_percent = int(completed / len(chunks) * 100)
                     self.log_info(f"多线程处理进度: {completed}/{len(chunks)} ({progress_percent}%)")
+                    print(f"[DEBUG] 进度：{completed}/{len(chunks)} ({progress_percent}%) [成功: {successful_chunks}, 失败: {failed_chunks}]")
         except Exception as e:
             self.log_error(f"线程池执行异常: {str(e)}\n{traceback.format_exc()}", file_path)
         finally:
-            # 记录总耗时
+            # 记录总耗时和成功/失败统计
             total_time = time.time() - start_time
             self.log_info(
-                f"多线程处理完成: {file_path.name}, 总耗时: {total_time:.2f}秒, 发现漏洞: {len(all_vulnerabilities)}个")
+                f"多线程处理完成: {file_path.name}, 总耗时: {total_time:.2f}秒, 总块数: {len(chunks)}, 成功: {successful_chunks}, 失败: {failed_chunks}, 发现漏洞: {len(all_vulnerabilities)}个")
+            print(f"[DEBUG] 异常分块只有{successful_chunks}块，进度：{successful_chunks}/{len(chunks)} （{int(successful_chunks/len(chunks)*100)}%）")
 
             # 确保更新进度
             self.event_queue.put(('progress', None, None))
