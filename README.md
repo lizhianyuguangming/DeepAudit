@@ -22,7 +22,7 @@ config.ini配置API密钥
 python DeepAudit.py
 ```
 
-![image](https://github.com/user-attachments/assets/15f017c3-e855-4e5c-85b9-f3edbe55dc4e)
+![图片](https://github.com/user-attachments/assets/901bf6b6-a1f0-4cb6-8053-7647678094ac)
 
 
 
