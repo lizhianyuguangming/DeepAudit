@@ -850,7 +850,7 @@ class CodeAuditApp:
 
         # 设置行高，增加行间距
         style = ttk.Style()
-        style.configure("Treeview", rowheight=35)  # 增加默认行高
+        style.configure("Treeview", rowheight=29)  # 增加默认行高
 
         # 为不同风险等级设置更明显的样式
         if hasattr(self, 'severity_colors'):
